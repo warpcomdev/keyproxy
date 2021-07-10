@@ -1,10 +1,10 @@
 package main
 
 import (
-	"embed"
 	"fmt"
 	htmlTemplate "html/template"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -12,17 +12,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-//go:embed resources/*
-var resources embed.FS
-
 type rootHandler struct {
 	Logger          *log.Logger
 	Realm           string
-	Resources       *embed.FS
+	Resources       fs.FS
 	Api             *KubeAPI
 	Factory         *PodFactory
 	resourceHandler http.Handler
-	templates       map[string]*htmlTemplate.Template
+	templateGroup   *htmlTemplate.Template
 }
 
 const (
@@ -38,20 +35,11 @@ const (
 	WaitTemplate  = "waitPage.html"
 )
 
-func NewServer(logger *log.Logger, realm string, resources *embed.FS, api *KubeAPI, factory *PodFactory) (*rootHandler, error) {
-	templates := make(map[string]*htmlTemplate.Template)
-	for _, page := range []string{
-		ErrorTemplate,
-		KillTemplate,
-		SpawnTemplate,
-		WaitTemplate,
-	} {
-		tmpl, err := htmlTemplate.ParseFS(resources, "resources/"+page)
-		if err != nil {
-			logger.WithField("page", page).WithError(err).Error("Failed to load template")
-			return nil, err
-		}
-		templates[page] = tmpl
+func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, factory *PodFactory) (*rootHandler, error) {
+	templateGroup, err := htmlTemplate.New(SpawnTemplate).ParseFS(resources, "*.html")
+	if err != nil {
+		logger.WithError(err).Error("Failed to load templates")
+		return nil, err
 	}
 	return &rootHandler{
 		Logger:          logger,
@@ -59,8 +47,8 @@ func NewServer(logger *log.Logger, realm string, resources *embed.FS, api *KubeA
 		Resources:       resources,
 		Api:             api,
 		Factory:         factory,
-		resourceHandler: http.FileServer(http.FS(resources)),
-		templates:       templates,
+		resourceHandler: http.StripPrefix(RESOURCEPATH, http.FileServer(http.FS(resources))),
+		templateGroup:   templateGroup,
 	}, nil
 }
 
@@ -158,7 +146,7 @@ func (h *rootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if proxy == nil {
 		redirectPath := WAITPATH
-		if info.Phase == PodFailed || info.Phase == PodSucceeded || info.Phase == PodUnknown {
+		if info.Type == Deleted || info.Phase == PodFailed || info.Phase == PodSucceeded || info.Phase == PodUnknown {
 			redirectPath = ERRORPATH
 		}
 		http.Redirect(w, r, redirectPath, http.StatusTemporaryRedirect)
@@ -186,34 +174,30 @@ func NewParams(cred Credentials, info PodInfo) TemplateParams {
 	}
 }
 
-func (h *rootHandler) render(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials, name string, create bool) {
+func (h *rootHandler) render(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials, name string, create bool, redirect bool) {
 	defer h.exhaust(r)
 	logger = logger.WithField("template", name)
-	_, info, err := mgr.Proxy(r.Context(), h.Api, create)
+	proxy, info, err := mgr.Proxy(r.Context(), h.Api, create)
 	if err != nil {
 		logger.WithError(err).Error("Failed to get current pod status")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	// If already available, redirect
-	// if info.Type != Deleted && info.Phase == PodRunning && info.Address != "" && proxy != nil {
-	//	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
-	//	return
-	// }
-	tmpl, ok := h.templates[name]
-	if !ok {
-		panic(fmt.Sprintf("Missing template %s", name))
+	if redirect && info.Type != Deleted && info.Phase == PodRunning && info.Address != "" && proxy != nil {
+		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+		return
 	}
 	w.Header().Add(http.CanonicalHeaderKey("Content-Type"), "text/html; encoding=utf-8")
 	w.WriteHeader(http.StatusOK)
 	params := NewParams(cred, info)
-	if err := tmpl.Execute(w, params); err != nil {
+	if err := h.templateGroup.ExecuteTemplate(w, name, params); err != nil {
 		logger.WithField("params", params).WithError(err).Error("Failed to render template")
 	}
 }
 
 func (h *rootHandler) errorPage(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials) {
-	h.render(logger, w, r, mgr, cred, ErrorTemplate, false)
+	h.render(logger, w, r, mgr, cred, ErrorTemplate, false, true)
 }
 
 func (h *rootHandler) killPage(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials) {
@@ -223,13 +207,13 @@ func (h *rootHandler) killPage(logger *log.Entry, w http.ResponseWriter, r *http
 		h.exhaust(r)
 		return
 	}
-	h.render(logger, w, r, mgr, cred, KillTemplate, false)
+	h.render(logger, w, r, mgr, cred, KillTemplate, false, false)
 }
 
 func (h *rootHandler) spawnPage(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials) {
-	h.render(logger, w, r, mgr, cred, SpawnTemplate, true)
+	h.render(logger, w, r, mgr, cred, SpawnTemplate, true, false)
 }
 
 func (h *rootHandler) waitPage(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials) {
-	h.render(logger, w, r, mgr, cred, WaitTemplate, false)
+	h.render(logger, w, r, mgr, cred, WaitTemplate, false, true)
 }

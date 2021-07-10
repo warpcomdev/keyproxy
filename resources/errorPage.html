@@ -1,18 +1,23 @@
 <html>
-    <body>
-        <table>
-            <tr><th>Service:</th><td>{{ .Service }}</td></tr>
-            <tr><th>Username:</th><td>{{ .Username }}</td></tr>
-        </table>
+
+<head>
+    <link rel="stylesheet" href="/resources/css/default.css" />
+</head>
+
+<body>
+    <div id="status">
         <p>Your pod is not ready to be used and must be serviced.</p>
-        <p>The last status of your pod is:</p>
-        <table>
-            <tr><th>EventType:</th><td>{{ .EventType }}</td></tr>
-            <tr><th>PodPhase:</th><td>{{ .PodPhase }}</td></tr>
-            <tr><th>Internal IP:</th><td>{{ .Address }}</td></tr>
-        </table>
-        <p>If your pod is in state <emph>DELETED</emph> and you want to boot it, please <a href="/podspawn">click here</a></p>
-        <p>Otherwise, if you want to kill it, please <a href="/podkill">click here</a></p>
-        <p>Note: This page does not autorefresh. To check the current status of your pod, please <a href="/">click here</a></p>
-    </body>
+    </div>
+    {{ template "tables.html" . }}
+    <div id="links">
+        <p>Note: This page does not autorefresh.</p>
+        <ul>
+            <li>To check the current status of your pod, please click <a href="/">here</a></li>
+            <li>If your pod is in state <emph>DELETED</emph> and you want to boot it, please click <a
+                    href="/podspawn">here</a></li>
+            <li>Otherwise, if you want to kill it, please click <a href="/podkill">here</a></li>
+        </ul>
+    </div>
+</body>
+
 </html>

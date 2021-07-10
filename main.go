@@ -1,6 +1,8 @@
 package main
 
 import (
+	"embed"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +17,34 @@ const (
 	PODCONFIG = "configs/pod.yaml"
 	REALM     = "KeyProxy Auth"
 )
+
+//go:embed resources/*
+var resources embed.FS
+
+// localResources checks if there is a local folder with resources
+// Otherwise, it uses the embedded ones.
+func localResources(logger *log.Logger, resourceDir string) fs.FS {
+	loggerCtx := logger.WithField("resources", resourceDir)
+	stat, err := os.Stat(resourceDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			panic(err)
+		}
+	} else {
+		if stat.IsDir() {
+			loggerCtx.Info("Using local resources")
+			return os.DirFS(resourceDir)
+		}
+	}
+	// Use embedded resources, but strip prefix to match
+	// the local dir use case.
+	loggerCtx.Info("Using embedded resources")
+	sub, err := fs.Sub(&resources, "resources")
+	if err != nil {
+		panic(err)
+	}
+	return sub
+}
 
 func main() {
 
@@ -38,8 +68,10 @@ func main() {
 		panic(err)
 	}
 
-	logger.WithField("realm", REALM).Info("Building proxy server")
-	proxy, err := NewServer(logger, REALM, &resources, api, factory)
+	// TODO: Get resourceDir from environment variable
+	resourceDir := "resources"
+	logger.WithFields(log.Fields{"realm": REALM, "resources": resourceDir}).Info("Building proxy server")
+	proxy, err := NewServer(logger, REALM, localResources(logger, resourceDir), api, factory)
 	if err != nil {
 		panic(err)
 	}

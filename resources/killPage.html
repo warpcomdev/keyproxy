@@ -1,10 +1,23 @@
 <html>
-    <body>
-        <table>
-            <tr><th>Service:</th><td>{{ .Service }}</td></tr>
-            <tr><th>Username:</th><td>{{ .Username }}</td></tr>
-        </table>
-        <p>Your order to kill your pod has been processed.</p>
-        <p>If you want to boot it again, please <a href="/podspawn">click here</a></p>
-    </body>
+
+<head>
+    <link rel="stylesheet" href="/resources/css/default.css" />
+</head>
+
+<body>
+    <div id="frame">
+        <div id="status">
+            <p>Your order to kill your pod has been processed.</p>
+        </div>
+        {{ template "tables.html" . }}
+        <div id="links">
+            <p>Note: This page does not autorefresh.</p>
+            <ul>
+                <li>To check the current status of your pod, please click <a href="/">here</a></li>
+                <li>If you want to boot it again, please click <a href="/podspawn">here</a></li>
+            </ul>
+        </div>
+    </div>
+</body>
+
 </html>
