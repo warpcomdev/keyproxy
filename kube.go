@@ -157,7 +157,7 @@ func (k *KubeAPI) forwardEvents(ctx context.Context, name string, stream watch.I
 			}
 			pod, err := k.castPod(event.Object)
 			if err != nil {
-				loggerCtx.WithError(err).Error("Failed to cast event as pod")
+				loggerCtx.WithField("type", event.Type).WithError(err).Error("Failed to cast event as pod")
 				continue
 			}
 			events <- PodInfo{
@@ -207,12 +207,12 @@ func (k *KubeAPI) PodCreate(ctx context.Context, desc *PodDescriptor) error {
 
 func (k *KubeAPI) castPod(obj runtime.Object) (*v1.Pod, error) {
 	gvk := obj.GetObjectKind().GroupVersionKind()
-	if gvk.Kind != "Pod" {
-		return nil, errors.New(fmt.Sprintf("Object kind is not pod but +%v", gvk))
+	if gvk.Kind != "" && gvk.Kind != "Pod" {
+		return nil, errors.New(fmt.Sprintf("Object kind is not pod but %+v", gvk.Kind))
 	}
 	pod, ok := obj.(*v1.Pod)
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("Could not cast kind +%v to v1.Pod struct", gvk))
+		return nil, errors.New(fmt.Sprintf("Could not cast kind %+v to v1.Pod struct", gvk.Kind))
 	}
 	return pod, nil
 }

@@ -119,6 +119,7 @@ func (h *rootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	manager, err := h.Factory.Find(h.Api, cred)
 	if err != nil {
+		contextLog.WithError(err).Error("Failed to get PodManager")
 		http.Error(w, "Failed to get PodManager", http.StatusInternalServerError)
 		h.exhaust(r)
 		return
@@ -145,6 +146,7 @@ func (h *rootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	proxy, info, err := manager.Proxy(r.Context(), h.Api, false)
 	if err != nil {
+		contextLog.WithError(err).Error("Failed to get pod status")
 		http.Error(w, "Failed to get pod status", http.StatusInternalServerError)
 		h.exhaust(r)
 		return
@@ -187,17 +189,17 @@ func NewParams(cred Credentials, info PodInfo) TemplateParams {
 func (h *rootHandler) render(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials, name string, create bool) {
 	defer h.exhaust(r)
 	logger = logger.WithField("template", name)
-	proxy, info, err := mgr.Proxy(r.Context(), h.Api, create)
+	_, info, err := mgr.Proxy(r.Context(), h.Api, create)
 	if err != nil {
 		logger.WithError(err).Error("Failed to get current pod status")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	// If already available, redirect
-	if info.Type != Deleted && info.Phase == PodRunning && info.Address != "" && proxy != nil {
-		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
-		return
-	}
+	// if info.Type != Deleted && info.Phase == PodRunning && info.Address != "" && proxy != nil {
+	//	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+	//	return
+	// }
 	tmpl, ok := h.templates[name]
 	if !ok {
 		panic(fmt.Sprintf("Missing template %s", name))

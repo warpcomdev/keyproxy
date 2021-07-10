@@ -31,6 +31,8 @@ func (c *Credentials) Hash(password string) string {
 }
 
 type PodFactory struct {
+	// AtomicTimestamp must be at the top of the struct for atomic calls
+	timestamp AtomicTimestamp
 	Logger    *log.Logger
 	Template  *template.Template
 	Scheme    string
@@ -38,8 +40,6 @@ type PodFactory struct {
 	managers  map[Credentials]*PodManager
 	mutex     sync.Mutex
 	waitGroup sync.WaitGroup
-	// timestamp and done are used by the timekeeping thread
-	timestamp AtomicTimestamp
 	// cancelCtx used for management of channel lifetimes
 	cancelCtx  context.Context
 	cancelFunc context.CancelFunc
@@ -56,7 +56,8 @@ func (f *PodFactory) Find(api *KubeAPI, creds Credentials) (*PodManager, error) 
 			return nil, errors.New("PodFactory is being cancelled")
 		}
 		ctxLogger.Info("Creating new manager")
-		mgr, err := f.newManager(api, creds)
+		var err error // Beware! we can't do ":=" below, otherwise it would shadow mgr above
+		mgr, err = f.newManager(api, creds)
 		if err != nil {
 			return nil, err
 		}

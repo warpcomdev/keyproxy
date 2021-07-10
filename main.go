@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	PODCONFIG = "/configs/pod.yaml"
+	PODCONFIG = "configs/pod.yaml"
 	REALM     = "KeyProxy Auth"
 )
 
@@ -23,14 +23,13 @@ func main() {
 	logger.Out = os.Stdout
 
 	logger.WithFields(log.Fields{"podconfig": PODCONFIG}).Info("Reading pod template")
-	tmpl, err := template.ParseFiles(PODCONFIG)
+	tmpl, err := template.New(filepath.Base(PODCONFIG)).Funcs(template.FuncMap(sprig.FuncMap())).ParseFiles(PODCONFIG)
 	if err != nil {
 		panic(err)
 	}
-	tmpl.Funcs(template.FuncMap(sprig.FuncMap()))
 
-	logger.WithFields(log.Fields{"port": 9390}).Info("Building pod factory")
-	factory := NewFactory(logger, tmpl, "http", 9390)
+	logger.WithFields(log.Fields{"port": 8080}).Info("Building pod factory")
+	factory := NewFactory(logger, tmpl, "http", 8080)
 	defer factory.Cancel()
 
 	logger.Info("Connecting to kubernetes API")

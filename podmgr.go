@@ -29,14 +29,15 @@ func (a *AtomicTimestamp) Store(v int64) {
 
 // PodManager handles the suscription to a pod's events
 type PodManager struct {
+	// Timestamp of last update to be used by PodFactory.
+	// Must be at the top of the struct for atomic ops to work.
+	Timestamp  AtomicTimestamp
 	Logger     *log.Logger
 	Descriptor *PodDescriptor
 	// Scheme and port of the backend server to proxy to.
 	// The IP address will be learnt from the kube cluster.
 	Scheme string
 	Port   int
-	// Timestamp of last update to be used by PodFactory
-	Timestamp AtomicTimestamp
 	// latest status detected and resulting reverse proxy
 	latest PodInfo
 	proxy  *httputil.ReverseProxy

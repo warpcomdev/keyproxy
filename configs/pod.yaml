@@ -2,28 +2,19 @@ apiVersion: v1
 kind: Pod
 metadata:
   labels:
-    app.kubernetes.io/instance: pro-sftp
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/name: sftp
-    fiware/component: smc-sftp
-    fiware/layer: sftp
-    fiware/tenant: multiTenant
-    helm.sh/chart: sftp
-    job-name: pro-{{ .Service }}-{{ .Username }}
-  name: pro-sftp-setup-f4qtd
-  namespace: smc-os2-pro
+    app: echo-server
+    service: {{ .Service }}
+    username: {{ .Username }}
+  name: test-{{ .Service | replace "_" "-" }}-{{ .Username | replace "_" "-" }}
+  namespace: smc-os2-dev
 spec:
   containers:
-  - args:
-    - /etc/sftpgo/update.py
-    - -u
-    - http://pro-sftp:8888
-    - /etc/initial.json
-    command:
-    - python3
-    image: python:3.9
+  - image: jmalloc/echo-server:0.2.0
     imagePullPolicy: IfNotPresent
-    name: python
+    name: echo
+    ports:
+    - name: http
+      containerPort: 8080
     resources:
       limits:
         cpu: 350m
@@ -31,20 +22,5 @@ spec:
       requests:
         cpu: 52m
         memory: 192Mi
-    volumeMounts:
-    - mountPath: /etc/sftpgo
-      name: config
-    - mountPath: /etc/initial.json
-      name: initial
-      subPath: initial.json
   imagePullSecrets:
   - name: fiware-platform-docker-account
-  volumes:
-  - configMap:
-      defaultMode: 420
-      name: pro-sftp
-    name: config
-  - name: initial
-    secret:
-      defaultMode: 420
-      secretName: pro-sftp

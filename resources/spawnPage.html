@@ -2,14 +2,14 @@
     <body>
         <table>
             <tr><th>Service:</th><td>{{ .Service }}</td></tr>
-            <tr><td>Username:</th><td>{{ .Username }}</td></tr>
+            <tr><th>Username:</th><td>{{ .Username }}</td></tr>
         </table>
         <p>Your order to spawn your pod has been processed.</p>
         <p>The last status of your pod is:</p>
         <table>
-            <tr><th>Service:</th><td>{{ .Service }}</td></tr>
-            <tr><td>Username:</th><td>{{ .Username }}</td></tr>
-            <tr><td>Internal IP:</th><td>{{ .Address }}</td></tr>
+            <tr><th>EventType:</th><td>{{ .EventType }}</td></tr>
+            <tr><th>PodPhase:</th><td>{{ .PodPhase }}</td></tr>
+            <tr><th>Internal IP:</th><td>{{ .Address }}</td></tr>
         </table>
         <p>It might take a few minutes for your pod to boot up.</p>
         <p>Note: This page does not autorefresh. To check the current status of your pod, please <a href="/">click here</a></p>
