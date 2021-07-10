@@ -1,0 +1,17 @@
+<html>
+    <body>
+        <table>
+            <tr><th>Service:</th><td>{{ .Service }}</td></tr>
+            <tr><td>Username:</th><td>{{ .Username }}</td></tr>
+        </table>
+        <p>Your pod is not ready to be used and must be serviced.</p>
+        <p>The last status of your pod is:</p>
+        <table>
+            <tr><th>Service:</th><td>{{ .Service }}</td></tr>
+            <tr><td>Username:</th><td>{{ .Username }}</td></tr>
+            <tr><td>Internal IP:</th><td>{{ .Address }}</td></tr>
+        </table>
+        <p>If you want to try and reboot it, please <a href="/podkill">click here</a></p>
+        <p>Note: This page does not autorefresh. To check the current status of your pod, please <a href="/">click here</a></p>
+    </body>
+</html>

@@ -37,9 +37,8 @@ type PodManager struct {
 	Port   int
 	// Timestamp of last update to be used by PodFactory
 	Timestamp AtomicTimestamp
-	// Status, last known IP and resulting reverse proxy
-	status PodPhase
-	lastIP string
+	// latest status detected and resulting reverse proxy
+	latest PodInfo
 	proxy  *httputil.ReverseProxy
 	// PendingDelete is set to true when pod is being destroyed
 	pendingDelete bool
@@ -49,13 +48,13 @@ type PodManager struct {
 
 // Proxy instance to current pod's IP.
 // Beware that the proxy might be nil if no IP, even when error == nil.
-func (m *PodManager) Proxy(ctx context.Context, api *KubeAPI, create bool) (*httputil.ReverseProxy, PodPhase, error) {
+func (m *PodManager) Proxy(ctx context.Context, api *KubeAPI, create bool) (*httputil.ReverseProxy, PodInfo, error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	if err := m.updateStatus(ctx, api, create); err != nil {
-		return nil, "", err
+		return nil, PodInfo{}, err
 	}
-	return m.proxy, m.status, nil
+	return m.proxy, m.latest, nil
 }
 
 // Delete the pod
@@ -77,26 +76,24 @@ func (m *PodManager) Delete(ctx context.Context, api *KubeAPI) error {
 // updateStatus must be called with the lock held
 func (m *PodManager) updateStatus(ctx context.Context, api *KubeAPI, create bool) error {
 	// If we don't know the container status, ask for it
-	if m.status == "" {
+	if m.latest.Phase == "" {
 		info, err := api.PodStatus(ctx, m.Descriptor.Name)
 		if err != nil {
 			return err
 		}
-		m.status = info.PodPhase
-		m.lastIP = info.Address
+		m.latest = info
 		// In case the pod is running, build a reverse proxy
-		if info.PodPhase == PodRunning && info.Address != "" {
-			m.proxy = m.reverseProxy()
+		if info.Type != Deleted && info.Phase == PodRunning && info.Address != "" {
+			m.proxy = m.reverseProxy(info.Address)
 		}
 	}
-	if m.status == PodMissing && create {
+	if m.latest.Type == Deleted && create {
 		err := api.PodCreate(ctx, m.Descriptor)
 		if err != nil {
 			return err
 		}
-		if m.status == "" || m.status == PodMissing {
-			m.status = PodPending
-		}
+		// Change event so that we won't create it again
+		m.latest.Type = Modified
 	}
 	return nil
 }
@@ -131,7 +128,8 @@ func (m *PodManager) Watch(ctx context.Context, api *KubeAPI, lifetime time.Dura
 				timestamp := m.Timestamp.Load()
 				remaining := timestamp + int64(lifetime/time.Second) - now
 				if remaining <= 0 {
-					loggerCtx.Info("Watch thread expired")
+					loggerCtx.Info("Watch thread expired, deleting pod")
+					m.Delete(ctx, api)
 					return
 				}
 				timer = time.NewTimer(time.Duration(remaining+1) * time.Second)
@@ -145,21 +143,18 @@ func (m *PodManager) Watch(ctx context.Context, api *KubeAPI, lifetime time.Dura
 					timer.Stop()
 					return
 				}
-				loggerCtx.WithField("event", info).Debug("Received event")
+				loggerEvent := loggerCtx.WithField("event", info)
 				m.mutex.Lock()
-				m.status = info.PodPhase
-				if m.lastIP != info.Address {
-					if info.Address == "" {
-						loggerCtx.Info("Pod lost its IP address")
-						m.proxy = nil
-					} else {
-						m.proxy = m.reverseProxy()
-					}
-					m.lastIP = info.Address
+				switch {
+				case info.Type == Deleted || info.Phase != PodRunning || info.Address == "":
+					loggerEvent.Info("Pod not ready for proxy")
+					m.proxy = nil
+				case m.latest.Address != info.Address:
+					loggerEvent.Info("Updating proxy address")
+					m.proxy = m.reverseProxy(info.Address)
 				}
-				// TODO: clear pendingDelete only when received destroy event.
-				if m.pendingDelete {
-					m.status = PodMissing
+				m.latest = info
+				if info.Type == Deleted {
 					m.pendingDelete = false
 				}
 				m.mutex.Unlock()
@@ -170,10 +165,10 @@ func (m *PodManager) Watch(ctx context.Context, api *KubeAPI, lifetime time.Dura
 }
 
 // reverseProxy must be called with the mutex held
-func (m *PodManager) reverseProxy() *httputil.ReverseProxy {
+func (m *PodManager) reverseProxy(address string) *httputil.ReverseProxy {
 	target := &url.URL{
 		Scheme: m.Scheme,
-		Host:   fmt.Sprintf("%s:%d", m.lastIP, m.Port),
+		Host:   fmt.Sprintf("%s:%d", address, m.Port),
 	}
 	tp := httputil.NewSingleHostReverseProxy(target)
 	return tp

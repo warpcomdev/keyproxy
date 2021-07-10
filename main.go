@@ -12,9 +12,8 @@ import (
 )
 
 const (
-	KILLPATH     = "/kill"
-	RESOURCEPATH = "/resources"
-	PODCONFIG    = "/configs/pod.yaml"
+	PODCONFIG = "/configs/pod.yaml"
+	REALM     = "KeyProxy Auth"
 )
 
 func main() {
@@ -23,31 +22,33 @@ func main() {
 	logger.Level = log.DebugLevel
 	logger.Out = os.Stdout
 
-	logger.WithFields(log.Fields{"podconfig": PODCONFIG, "port": 9390}).Info("Building pod factory")
+	logger.WithFields(log.Fields{"podconfig": PODCONFIG}).Info("Reading pod template")
 	tmpl, err := template.ParseFiles(PODCONFIG)
 	if err != nil {
 		panic(err)
 	}
 	tmpl.Funcs(template.FuncMap(sprig.FuncMap()))
+
+	logger.WithFields(log.Fields{"port": 9390}).Info("Building pod factory")
 	factory := NewFactory(logger, tmpl, "http", 9390)
 	defer factory.Cancel()
 
-	logger.Info("Connection to kubernetes API")
+	logger.Info("Connecting to kubernetes API")
 	api, err := NewAPI(logger, filepath.Join(homedir.HomeDir(), ".kube", "config"), "")
 	if err != nil {
 		panic(err)
 	}
 
-	logger.WithField("port", 8080).Info("Building proxy server")
+	logger.WithField("realm", REALM).Info("Building proxy server")
+	proxy, err := NewServer(logger, REALM, &resources, api, factory)
+	if err != nil {
+		panic(err)
+	}
+
+	logger.WithField("port", 8080).Info("Starting service")
 	srv := &http.Server{
-		Addr: ":8080",
-		Handler: &rootHandler{
-			Factory:   factory,
-			Api:       api,
-			Resources: &resources,
-			Logger:    logger,
-			Realm:     "Keyproxy Auth",
-		},
+		Addr:    ":8080",
+		Handler: proxy,
 	}
 	if err := srv.ListenAndServe(); err != nil {
 		panic(err)

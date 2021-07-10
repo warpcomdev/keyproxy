@@ -78,9 +78,9 @@ func NewAPI(logger *log.Logger, kubeconfigPath, namespace string) (*KubeAPI, err
 }
 
 type PodPhase string
+type EventType string
 
 const (
-	PodMissing PodPhase = "Missing"
 	// PodPending means the pod has been accepted by the system, but one or more of the containers
 	// has not been started. This includes time before being bound to a node, as well as time spent
 	// pulling images onto the host.
@@ -97,11 +97,18 @@ const (
 	// PodUnknown means that for some reason the state of the pod could not be obtained, typically due
 	// to an error in communicating with the host of the pod.
 	PodUnknown PodPhase = PodPhase(v1.PodUnknown)
+
+	Added    EventType = EventType(watch.Added)
+	Modified EventType = EventType(watch.Modified)
+	Deleted  EventType = EventType(watch.Deleted)
+	Bookmark EventType = EventType(watch.Bookmark)
+	Error    EventType = EventType(watch.Error)
 )
 
 type PodInfo struct {
-	PodPhase PodPhase
-	Address  string
+	Type    EventType
+	Phase   PodPhase
+	Address string
 }
 
 // PodStatus gets the pod's current status and IP address
@@ -109,11 +116,11 @@ func (k *KubeAPI) PodStatus(ctx context.Context, name string) (PodInfo, error) {
 	pod, err := k.client.CoreV1().Pods(k.Namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if kerrors.IsNotFound(err) {
-			return PodInfo{PodPhase: PodMissing}, nil
+			return PodInfo{Type: Deleted, Phase: PodUnknown}, nil
 		}
-		return PodInfo{PodPhase: PodUnknown}, err
+		return PodInfo{Type: Error, Phase: PodUnknown}, err
 	}
-	return PodInfo{PodPhase: PodPhase(pod.Status.Phase), Address: pod.Status.PodIP}, nil
+	return PodInfo{Type: Modified, Phase: PodPhase(pod.Status.Phase), Address: pod.Status.PodIP}, nil
 }
 
 // PodWatch subscribes to the pod's PodInfo events
@@ -123,15 +130,10 @@ func (k *KubeAPI) PodWatch(ctx context.Context, name string) (<-chan PodInfo, er
 	}
 	stream, err := k.client.CoreV1().Pods(k.Namespace).Watch(ctx, opts)
 	if err != nil {
-		if kerrors.IsNotFound(err) {
-			events := make(chan PodInfo, 1)
-			events <- PodInfo{PodPhase: PodMissing}
-			close(events)
-			return events, nil
-		}
 		return nil, err
 	}
 	events := make(chan PodInfo, 16)
+	// Delegates closing the stream and events to forwardEvents
 	go k.forwardEvents(ctx, name, stream, events)
 	return events, nil
 }
@@ -158,7 +160,11 @@ func (k *KubeAPI) forwardEvents(ctx context.Context, name string, stream watch.I
 				loggerCtx.WithError(err).Error("Failed to cast event as pod")
 				continue
 			}
-			events <- PodInfo{PodPhase: PodPhase(pod.Status.Phase), Address: pod.Status.PodIP}
+			events <- PodInfo{
+				Type:    EventType(event.Type),
+				Phase:   PodPhase(pod.Status.Phase),
+				Address: pod.Status.PodIP,
+			}
 		}
 	}
 }

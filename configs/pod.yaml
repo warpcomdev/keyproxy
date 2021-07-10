@@ -9,7 +9,7 @@ metadata:
     fiware/layer: sftp
     fiware/tenant: multiTenant
     helm.sh/chart: sftp
-    job-name: pro-{{ .Service }}-{{ .User }}
+    job-name: pro-{{ .Service }}-{{ .Username }}
   name: pro-sftp-setup-f4qtd
   namespace: smc-os2-pro
 spec:

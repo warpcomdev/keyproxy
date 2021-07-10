@@ -1,5 +1,10 @@
 <html>
     <body>
-        This is the killpage for service {{ .Service }}, user {{ .Username }}
+        <table>
+            <tr><th>Service:</th><td>{{ .Service }}</td></tr>
+            <tr><td>Username:</th><td>{{ .Username }}</td></tr>
+        </table>
+        <p>Your order to kill your pod has been processed.</p>
+        <p>If you want to boot it again, please <a href="/podspawn">click here</a></p>
     </body>
 </html>
