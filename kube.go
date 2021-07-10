@@ -142,7 +142,11 @@ func (k *KubeAPI) forwardEvents(ctx context.Context, name string, stream watch.I
 	for {
 		select {
 		case <-ctx.Done():
+			// Stop and exhaust the stream, to release the ssucription
 			stream.Stop()
+			for range stream.ResultChan() {
+			}
+			return
 		case event, ok := <-stream.ResultChan():
 			if !ok {
 				// No more events to stream, return

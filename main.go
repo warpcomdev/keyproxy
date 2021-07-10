@@ -29,11 +29,8 @@ func main() {
 		panic(err)
 	}
 	tmpl.Funcs(template.FuncMap(sprig.FuncMap()))
-	factory := &PodFactory{
-		Logger:   logger,
-		Template: tmpl,
-		Port:     9390,
-	}
+	factory := NewFactory(logger, tmpl, "http", 9390)
+	defer factory.Cancel()
 
 	logger.Info("Connection to kubernetes API")
 	api, err := NewAPI(logger, filepath.Join(homedir.HomeDir(), ".kube", "config"), "")
