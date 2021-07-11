@@ -17,10 +17,10 @@ import (
 // Paths that trigger server routines
 const (
 	RESOURCEPATH = "/resources"
-	ERRORPATH    = "/poderror"
-	KILLPATH     = "/podkill"
-	SPAWNPATH    = "/podspawn"
-	WAITPATH     = "/podwait"
+	ERRORPATH    = "/podapi/error"
+	KILLPATH     = "/podapi/kill"
+	SPAWNPATH    = "/podapi/spawn"
+	WAITPATH     = "/podapi/wait"
 )
 
 // Templates for each feedback page
