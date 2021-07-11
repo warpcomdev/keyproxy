@@ -6,26 +6,10 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 )
-
-// AtomicTimestamp stores an atomic unix timestamp
-type AtomicTimestamp struct {
-	timestamp int64
-}
-
-// Load the timestamp atomically
-func (a *AtomicTimestamp) Load() int64 {
-	return atomic.LoadInt64(&a.timestamp)
-}
-
-// Store the timestamp atomically
-func (a *AtomicTimestamp) Store(v int64) {
-	atomic.StoreInt64(&a.timestamp, v)
-}
 
 // PodManager handles the suscription to a pod's events
 type PodManager struct {
@@ -47,7 +31,8 @@ type PodManager struct {
 	mutex sync.Mutex
 }
 
-// Proxy instance to current pod's IP.
+// Proxy returns a httputil.ReverseProxy instance to current pod's IP.
+// If create == true, the pod will be scheduled for creation if not existing.
 // Beware that the proxy might be nil if no IP, even when error == nil.
 func (m *PodManager) Proxy(ctx context.Context, api *KubeAPI, create bool) (*httputil.ReverseProxy, PodInfo, error) {
 	m.mutex.Lock()
@@ -66,7 +51,7 @@ func (m *PodManager) Delete(ctx context.Context, api *KubeAPI) error {
 		return nil
 	}
 	m.pendingDelete = true
-	err := api.PodDelete(ctx, m.Descriptor.Name)
+	err := api.DeletePod(ctx, m.Descriptor.Name)
 	if err != nil {
 		m.pendingDelete = false
 		return err
@@ -89,7 +74,7 @@ func (m *PodManager) updateStatus(ctx context.Context, api *KubeAPI, create bool
 		}
 	}
 	if m.latest.Type == Deleted && create {
-		err := api.PodCreate(ctx, m.Descriptor)
+		err := api.CreatePod(ctx, m.Descriptor)
 		if err != nil {
 			return err
 		}
@@ -103,7 +88,7 @@ func (m *PodManager) updateStatus(ctx context.Context, api *KubeAPI, create bool
 // If the watch is closed or the ctx or lifetime expire, it calls the cleanup func.
 func (m *PodManager) Watch(ctx context.Context, api *KubeAPI, lifetime time.Duration, cleanup func()) error {
 	cancelCtx, cancelFunc := context.WithCancel(ctx)
-	watch, err := api.PodWatch(cancelCtx, m.Descriptor.Name)
+	watch, err := api.WatchPod(cancelCtx, m.Descriptor.Name)
 	if err != nil {
 		cancelFunc() // Just in case
 		return err
@@ -125,9 +110,9 @@ func (m *PodManager) Watch(ctx context.Context, api *KubeAPI, lifetime time.Dura
 		for {
 			select {
 			case <-timer.C:
-				now := time.Now().Unix()
+				now := UnixTimestamp(time.Now().Unix())
 				timestamp := m.Timestamp.Load()
-				remaining := timestamp + int64(lifetime/time.Second) - now
+				remaining := timestamp + UnixTimestamp(lifetime/time.Second) - now
 				if remaining <= 0 {
 					loggerCtx.Info("Watch thread expired, deleting pod")
 					m.Delete(ctx, api)
@@ -165,7 +150,7 @@ func (m *PodManager) Watch(ctx context.Context, api *KubeAPI, lifetime time.Dura
 	return nil
 }
 
-// reverseProxy must be called with the mutex held
+// reverseProxy builds the reverse proxy instance.
 func (m *PodManager) reverseProxy(address string) *httputil.ReverseProxy {
 	target := &url.URL{
 		Scheme: m.Scheme,

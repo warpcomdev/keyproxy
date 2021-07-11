@@ -68,10 +68,14 @@ func main() {
 		panic(err)
 	}
 
+	logger.Info("Building auth manager")
+	auth := NewAuth(logger)
+	defer auth.Cancel()
+
 	// TODO: Get resourceDir from environment variable
 	resourceDir := "resources"
 	logger.WithFields(log.Fields{"realm": REALM, "resources": resourceDir}).Info("Building proxy server")
-	proxy, err := NewServer(logger, REALM, localResources(logger, resourceDir), api, factory)
+	proxy, err := NewServer(logger, REALM, localResources(logger, resourceDir), api, auth, factory)
 	if err != nil {
 		panic(err)
 	}

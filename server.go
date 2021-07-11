@@ -9,43 +9,61 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/masterminds/sprig"
 	log "github.com/sirupsen/logrus"
 )
 
-type rootHandler struct {
-	Logger          *log.Logger
-	Realm           string
-	Resources       fs.FS
-	Api             *KubeAPI
-	Factory         *PodFactory
-	resourceHandler http.Handler
-	templateGroup   *htmlTemplate.Template
-}
-
+// Paths that trigger server routines
 const (
 	RESOURCEPATH = "/resources"
 	ERRORPATH    = "/poderror"
 	KILLPATH     = "/podkill"
 	SPAWNPATH    = "/podspawn"
 	WAITPATH     = "/podwait"
+)
 
+// Templates for each feedback page
+const (
 	ErrorTemplate = "errorPage.html"
 	KillTemplate  = "killPage.html"
 	SpawnTemplate = "spawnPage.html"
 	WaitTemplate  = "waitPage.html"
 )
 
-func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, factory *PodFactory) (*rootHandler, error) {
-	templateGroup, err := htmlTemplate.New(SpawnTemplate).ParseFS(resources, "*.html")
+// TemplateParams contains all the parameters available to templates
+type TemplateParams struct {
+	Service   string
+	Username  string
+	EventType string
+	PodPhase  string
+	Address   string
+}
+
+// ProxyHandler manages the pod lifecycle requests and proxies other requests.
+type ProxyHandler struct {
+	Logger          *log.Logger
+	Realm           string
+	Resources       fs.FS
+	Api             *KubeAPI
+	Auth            *AuthManager
+	Factory         *PodFactory
+	resourceHandler http.Handler
+	templateGroup   *htmlTemplate.Template
+}
+
+// NewServer creates new roxy handler
+func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, auth *AuthManager, factory *PodFactory) (*ProxyHandler, error) {
+	templateGroup, err := htmlTemplate.New(SpawnTemplate).Funcs(sprig.FuncMap()).ParseFS(resources, "*.html")
 	if err != nil {
 		logger.WithError(err).Error("Failed to load templates")
 		return nil, err
 	}
-	return &rootHandler{
+	return &ProxyHandler{
 		Logger:          logger,
 		Realm:           realm,
 		Resources:       resources,
 		Api:             api,
+		Auth:            auth,
 		Factory:         factory,
 		resourceHandler: http.StripPrefix(RESOURCEPATH, http.FileServer(http.FS(resources))),
 		templateGroup:   templateGroup,
@@ -53,20 +71,24 @@ func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, 
 }
 
 // Exhaust the request body to avoid men leaks
-func (h *rootHandler) exhaust(r *http.Request) {
+func (h *ProxyHandler) exhaust(r *http.Request) {
 	if r.Body != nil {
 		io.Copy(ioutil.Discard, r.Body)
 		r.Body.Close()
 	}
 }
 
-func (h *rootHandler) unauth(r *http.Request, w http.ResponseWriter, msg string) {
-	w.Header().Add("WWW-Authenticate", fmt.Sprintf("Basic realm=%s", h.Realm))
+// unauth returns 401 with proper headers
+func (h *ProxyHandler) unauth(r *http.Request, w http.ResponseWriter, msg string) {
+	w.Header().Add(http.CanonicalHeaderKey("WWW-Authenticate"), fmt.Sprintf("Basic realm=%s", h.Realm))
 	http.Error(w, "Missing auth credentials", http.StatusUnauthorized)
 	h.exhaust(r)
 }
 
-func (h *rootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+// ServeHTTP implements http.Handler
+func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+
+	// Extract service, username and pass from basic auth
 	user, pass, ok := r.BasicAuth()
 	contextLog := h.Logger.WithFields(log.Fields{
 		"url":  r.URL.String(),
@@ -90,16 +112,20 @@ func (h *rootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.unauth(r, w, "Empty service name, user or password")
 		return
 	}
-	ok, err := Auth(contextLog, cred, pass)
-	if !ok {
-		h.unauth(r, w, "Wrong authorization credentials")
-		return
-	}
+
+	// Check auth credentials
+	ok, err := h.Auth.Check(cred, pass)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		h.exhaust(r)
 		return
 	}
+	if !ok {
+		h.unauth(r, w, "Wrong authorization credentials")
+		return
+	}
+
+	// Get PodManager
 	if strings.HasPrefix(r.URL.Path, RESOURCEPATH) {
 		contextLog.Debug("Triggering resource path")
 		h.resourceHandler.ServeHTTP(w, r)
@@ -112,6 +138,8 @@ func (h *rootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.exhaust(r)
 		return
 	}
+
+	// Intercept API paths
 	if strings.HasPrefix(r.URL.Path, ERRORPATH) {
 		contextLog.Debug("Triggering error path")
 		h.errorPage(contextLog, w, r, manager, cred)
@@ -132,6 +160,8 @@ func (h *rootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.waitPage(contextLog, w, r, manager, cred)
 		return
 	}
+
+	// By default, proxy to backend
 	proxy, info, err := manager.Proxy(r.Context(), h.Api, false)
 	if err != nil {
 		contextLog.WithError(err).Error("Failed to get pod status")
@@ -139,12 +169,14 @@ func (h *rootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.exhaust(r)
 		return
 	}
-	if proxy == nil && r.URL.Path != "/" {
-		http.Error(w, "Pod IP not found", http.StatusNotFound)
-		h.exhaust(r)
-		return
-	}
 	if proxy == nil {
+		// Redirct only root path, to avoid returning text/html when
+		// the client requests other resources, like css, js, etc.
+		if r.URL.Path != "/" {
+			http.Error(w, "Pod IP not found", http.StatusNotFound)
+			h.exhaust(r)
+			return
+		}
 		redirectPath := WAITPATH
 		if info.Type == Deleted || info.Phase == PodFailed || info.Phase == PodSucceeded || info.Phase == PodUnknown {
 			redirectPath = ERRORPATH
@@ -154,14 +186,6 @@ func (h *rootHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxy.ServeHTTP(w, r)
-}
-
-type TemplateParams struct {
-	Service   string
-	Username  string
-	EventType string
-	PodPhase  string
-	Address   string
 }
 
 func NewParams(cred Credentials, info PodInfo) TemplateParams {
@@ -174,7 +198,8 @@ func NewParams(cred Credentials, info PodInfo) TemplateParams {
 	}
 }
 
-func (h *rootHandler) render(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials, name string, create bool, redirect bool) {
+// Render a template
+func (h *ProxyHandler) render(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials, name string, create bool, redirect bool) {
 	defer h.exhaust(r)
 	logger = logger.WithField("template", name)
 	proxy, info, err := mgr.Proxy(r.Context(), h.Api, create)
@@ -196,11 +221,11 @@ func (h *rootHandler) render(logger *log.Entry, w http.ResponseWriter, r *http.R
 	}
 }
 
-func (h *rootHandler) errorPage(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials) {
+func (h *ProxyHandler) errorPage(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials) {
 	h.render(logger, w, r, mgr, cred, ErrorTemplate, false, true)
 }
 
-func (h *rootHandler) killPage(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials) {
+func (h *ProxyHandler) killPage(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials) {
 	if err := mgr.Delete(r.Context(), h.Api); err != nil {
 		logger.WithError(err).Error("Failed to kill pod")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -210,10 +235,10 @@ func (h *rootHandler) killPage(logger *log.Entry, w http.ResponseWriter, r *http
 	h.render(logger, w, r, mgr, cred, KillTemplate, false, false)
 }
 
-func (h *rootHandler) spawnPage(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials) {
+func (h *ProxyHandler) spawnPage(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials) {
 	h.render(logger, w, r, mgr, cred, SpawnTemplate, true, false)
 }
 
-func (h *rootHandler) waitPage(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials) {
+func (h *ProxyHandler) waitPage(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials) {
 	h.render(logger, w, r, mgr, cred, WaitTemplate, false, true)
 }

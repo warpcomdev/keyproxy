@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"sync"
 	"text/template"
@@ -13,22 +11,12 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type Credentials struct {
-	Service  string
-	Username string
-}
+// POD_LIFETIME: Destroy pod after this long without activity
+const (
+	POD_LIFETIME = 2 * time.Hour
+)
 
-// LIFETIME: Destroy pod after this long without activity
-const LIFETIME = 2 * time.Hour
-
-// Hash() is not thread safe, beware...
-func (c *Credentials) Hash(password string) string {
-	h := sha256.New()
-	h.Write([]byte(c.Service))
-	h.Write([]byte(c.Username))
-	h.Write([]byte(password))
-	return base64.StdEncoding.EncodeToString(h.Sum(nil))
-}
+var ErrorFactoryCancelled = errors.New("PodFactory is being cancelled")
 
 type PodFactory struct {
 	// AtomicTimestamp must be at the top of the struct for atomic calls
@@ -45,6 +33,27 @@ type PodFactory struct {
 	cancelFunc context.CancelFunc
 }
 
+// NewFactory creates a Factory for PodManagers
+func NewFactory(logger *log.Logger, tmpl *template.Template, scheme string, port int) *PodFactory {
+	cancelCtx, cancelFunc := context.WithCancel(context.Background())
+	factory := &PodFactory{
+		Logger:     logger,
+		Template:   tmpl,
+		Scheme:     scheme,
+		Port:       port,
+		managers:   make(map[Credentials]*PodManager),
+		cancelCtx:  cancelCtx,
+		cancelFunc: cancelFunc,
+	}
+	// Keep track of time
+	factory.waitGroup.Add(1)
+	go func() {
+		defer factory.waitGroup.Done()
+		factory.timestamp.timeKeeper(cancelCtx, time.Second)
+	}()
+	return factory
+}
+
 // Find manager for the given credentials.
 func (f *PodFactory) Find(api *KubeAPI, creds Credentials) (*PodManager, error) {
 	ctxLogger := f.Logger.WithField("creds", creds)
@@ -53,7 +62,7 @@ func (f *PodFactory) Find(api *KubeAPI, creds Credentials) (*PodManager, error) 
 	mgr, ok := f.managers[creds]
 	if !ok {
 		if f.cancelFunc == nil {
-			return nil, errors.New("PodFactory is being cancelled")
+			return nil, ErrorFactoryCancelled
 		}
 		ctxLogger.Info("Creating new manager")
 		var err error // Beware! we can't do ":=" below, otherwise it would shadow mgr above
@@ -83,16 +92,17 @@ func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, e
 		Scheme:     f.Scheme,
 		Port:       f.Port,
 	}
-	err = manager.Watch(f.cancelCtx, api, LIFETIME, func() {
+	f.waitGroup.Add(1)
+	err = manager.Watch(f.cancelCtx, api, POD_LIFETIME, func() {
 		defer f.waitGroup.Done()
 		f.mutex.Lock()
 		delete(f.managers, creds)
 		f.mutex.Unlock()
 	})
 	if err != nil {
+		f.waitGroup.Done() // since cleanup functon above won't be called
 		return nil, err
 	}
-	f.waitGroup.Add(1)
 	return manager, nil
 }
 
@@ -109,32 +119,4 @@ func (f *PodFactory) Cancel() {
 	f.mutex.Unlock()
 	cancelFunc()
 	f.waitGroup.Wait()
-}
-
-// NewFactory creates a Factory for PodManagers
-func NewFactory(logger *log.Logger, tmpl *template.Template, scheme string, port int) *PodFactory {
-	cancelCtx, cancelFunc := context.WithCancel(context.Background())
-	factory := &PodFactory{
-		Logger:     logger,
-		Template:   tmpl,
-		Scheme:     scheme,
-		Port:       port,
-		managers:   make(map[Credentials]*PodManager),
-		cancelCtx:  cancelCtx,
-		cancelFunc: cancelFunc,
-	}
-	// Keep track of time
-	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-cancelCtx.Done():
-				return
-			case now := <-ticker.C:
-				factory.timestamp.Store(now.Unix())
-			}
-		}
-	}()
-	return factory
 }

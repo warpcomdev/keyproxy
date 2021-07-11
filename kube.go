@@ -21,64 +21,14 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-type KubeAPI struct {
-	Logger         *log.Logger
-	KubeconfigPath string
-	Namespace      string
-	client         *kubernetes.Clientset
-}
-
-// See https://github.com/kubernetes/kubernetes/pull/63707
-// and https://stackoverflow.com/questions/55314152/how-to-get-namespace-from-current-context-set-in-kube-config/65661997#65661997
-func (k *KubeAPI) getNamespace() string {
-	// This way assumes you've set the POD_NAMESPACE environment variable using the downward API.
-	// This check has to be done first for backwards compatibility with the way InClusterConfig was originally set up
-	if ns, ok := os.LookupEnv("POD_NAMESPACE"); ok {
-		return ns
-	}
-	// Fall back to the namespace associated with the service account token, if available
-	if data, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
-		if ns := strings.TrimSpace(string(data)); len(ns) > 0 {
-			return ns
-		}
-	}
-	if clientCfg, err := clientcmd.NewDefaultClientConfigLoadingRules().Load(); err == nil {
-		return clientCfg.Contexts[clientCfg.CurrentContext].Namespace
-	}
-	return "default"
-}
-
-func NewAPI(logger *log.Logger, kubeconfigPath, namespace string) (*KubeAPI, error) {
-	k := &KubeAPI{
-		Logger:         logger,
-		KubeconfigPath: kubeconfigPath,
-	}
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		if !errors.Is(err, rest.ErrNotInCluster) {
-			return nil, err
-		}
-		config, err = clientcmd.BuildConfigFromFlags("", k.KubeconfigPath)
-		if err != nil {
-			return nil, err
-		}
-	}
-	// creates the clientset
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, err
-	}
-	// Get namespace too
-	k.client = clientset
-	if namespace == "" {
-		namespace = k.getNamespace()
-	}
-	k.Namespace = namespace
-	return k, nil
-}
-
+// PodPhase encapsulates kubernetes own PodPhase type
 type PodPhase string
+
+// EventType encapsulates kubernetes own EventType type
 type EventType string
+
+// PodDescriptor is an alias to avoid having to import the v1 apis in other files.
+type PodDescriptor = v1.Pod
 
 const (
 	// PodPending means the pod has been accepted by the system, but one or more of the containers
@@ -105,10 +55,75 @@ const (
 	Error    EventType = EventType(watch.Error)
 )
 
+// PodInfo encapsulates the pod information delivered.
 type PodInfo struct {
 	Type    EventType
 	Phase   PodPhase
 	Address string
+}
+
+// PodKindError raised when received event for an object which is not a pod.
+type PodKindError string
+
+func (err PodKindError) Error() string {
+	return string(err)
+}
+
+// KubeAPI encapsulates calls to Kubernetes API
+type KubeAPI struct {
+	Logger         *log.Logger
+	KubeconfigPath string
+	Namespace      string
+	client         *kubernetes.Clientset
+}
+
+func NewAPI(logger *log.Logger, kubeconfigPath, namespace string) (*KubeAPI, error) {
+	k := &KubeAPI{
+		Logger:         logger,
+		KubeconfigPath: kubeconfigPath,
+	}
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		if !errors.Is(err, rest.ErrNotInCluster) {
+			return nil, err
+		}
+		config, err = clientcmd.BuildConfigFromFlags("", k.KubeconfigPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// creates the clientset
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	k.client = clientset
+	// Get namespace too
+	if namespace == "" {
+		namespace = k.namespace()
+	}
+	k.Namespace = namespace
+	return k, nil
+}
+
+// See https://github.com/kubernetes/kubernetes/pull/63707
+// and https://stackoverflow.com/questions/55314152/how-to-get-namespace-from-current-context-set-in-kube-config/65661997#65661997
+func (k *KubeAPI) namespace() string {
+	// This way assumes you've set the POD_NAMESPACE environment variable using the downward API.
+	// This check has to be done first for backwards compatibility with the way InClusterConfig was originally set up
+	if ns, ok := os.LookupEnv("POD_NAMESPACE"); ok {
+		return ns
+	}
+	// Fall back to the namespace associated with the service account token, if available
+	if data, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+		if ns := strings.TrimSpace(string(data)); len(ns) > 0 {
+			return ns
+		}
+	}
+	if clientCfg, err := clientcmd.NewDefaultClientConfigLoadingRules().Load(); err == nil {
+		return clientCfg.Contexts[clientCfg.CurrentContext].Namespace
+	}
+	return "default"
 }
 
 // PodStatus gets the pod's current status and IP address
@@ -123,8 +138,8 @@ func (k *KubeAPI) PodStatus(ctx context.Context, name string) (PodInfo, error) {
 	return PodInfo{Type: Modified, Phase: PodPhase(pod.Status.Phase), Address: pod.Status.PodIP}, nil
 }
 
-// PodWatch subscribes to the pod's PodInfo events
-func (k *KubeAPI) PodWatch(ctx context.Context, name string) (<-chan PodInfo, error) {
+// WatchPod subscribes to the pod's PodInfo events
+func (k *KubeAPI) WatchPod(ctx context.Context, name string) (<-chan PodInfo, error) {
 	opts := metav1.ListOptions{
 		FieldSelector: fields.OneTermEqualSelector(metav1.ObjectNameField, name).String(),
 	}
@@ -169,7 +184,7 @@ func (k *KubeAPI) forwardEvents(ctx context.Context, name string, stream watch.I
 	}
 }
 
-func (k *KubeAPI) PodDelete(ctx context.Context, name string) error {
+func (k *KubeAPI) DeletePod(ctx context.Context, name string) error {
 	err := k.client.CoreV1().Pods(k.Namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil && kerrors.IsNotFound(err) {
 		log.WithField("name", name).Info("Pod does not exist, skipping")
@@ -177,9 +192,6 @@ func (k *KubeAPI) PodDelete(ctx context.Context, name string) error {
 	}
 	return err
 }
-
-// Alias to avoid having to import the v1 apis in other files
-type PodDescriptor = v1.Pod
 
 func (k *KubeAPI) Decode(template string) (*PodDescriptor, error) {
 	decoder := scheme.Codecs.UniversalDeserializer()
@@ -194,7 +206,7 @@ func (k *KubeAPI) Decode(template string) (*PodDescriptor, error) {
 	return pod, nil
 }
 
-func (k *KubeAPI) PodCreate(ctx context.Context, desc *PodDescriptor) error {
+func (k *KubeAPI) CreatePod(ctx context.Context, desc *PodDescriptor) error {
 	pod, err := k.client.CoreV1().Pods(k.Namespace).Create(ctx, desc, metav1.CreateOptions{})
 	if err != nil {
 		if !kerrors.IsAlreadyExists(err) {
@@ -208,11 +220,11 @@ func (k *KubeAPI) PodCreate(ctx context.Context, desc *PodDescriptor) error {
 func (k *KubeAPI) castPod(obj runtime.Object) (*v1.Pod, error) {
 	gvk := obj.GetObjectKind().GroupVersionKind()
 	if gvk.Kind != "" && gvk.Kind != "Pod" {
-		return nil, errors.New(fmt.Sprintf("Object kind is not pod but %+v", gvk.Kind))
+		return nil, PodKindError(fmt.Sprintf("Object kind is not pod but %s", gvk.Kind))
 	}
 	pod, ok := obj.(*v1.Pod)
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("Could not cast kind %+v to v1.Pod struct", gvk.Kind))
+		return nil, PodKindError(fmt.Sprintf("Could not cast kind %s to v1.Pod struct", gvk.Kind))
 	}
 	return pod, nil
 }
