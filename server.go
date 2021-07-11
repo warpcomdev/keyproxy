@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	htmlTemplate "html/template"
 	"io"
 	"io/fs"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt"
 	"github.com/masterminds/sprig"
 	log "github.com/sirupsen/logrus"
 )
@@ -21,7 +21,12 @@ const (
 	KILLPATH     = "/podapi/kill"
 	SPAWNPATH    = "/podapi/spawn"
 	WAITPATH     = "/podapi/wait"
+	LOGINPATH    = "/podapi/login"
+	LOGOUTPATH   = "/podapi/logout"
 )
+
+// Session Cookie name
+const SESSIONCOOKIE = "KEYPROXY_SESSION"
 
 // Templates for each feedback page
 const (
@@ -29,6 +34,7 @@ const (
 	KillTemplate  = "killPage.html"
 	SpawnTemplate = "spawnPage.html"
 	WaitTemplate  = "waitPage.html"
+	LoginTemplate = "loginPage.html"
 )
 
 // TemplateParams contains all the parameters available to templates
@@ -47,6 +53,7 @@ type ProxyHandler struct {
 	TimeKeeper
 	Logger          *log.Logger
 	Realm           string
+	SigningKey      []byte
 	Resources       fs.FS
 	Api             *KubeAPI
 	Auth            *AuthManager
@@ -55,8 +62,15 @@ type ProxyHandler struct {
 	templateGroup   *htmlTemplate.Template
 }
 
+type CustomClaims struct {
+	jwt.StandardClaims
+	Service  string
+	Username string
+	Hash     uint32
+}
+
 // NewServer creates new roxy handler
-func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, auth *AuthManager, factory *PodFactory) (*ProxyHandler, error) {
+func NewServer(logger *log.Logger, realm string, signingKey []byte, resources fs.FS, api *KubeAPI, auth *AuthManager, factory *PodFactory) (*ProxyHandler, error) {
 	templateGroup, err := htmlTemplate.New(SpawnTemplate).Funcs(sprig.FuncMap()).ParseFS(resources, "*.html")
 	if err != nil {
 		logger.WithError(err).Error("Failed to load templates")
@@ -65,6 +79,7 @@ func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, 
 	handler := &ProxyHandler{
 		Logger:          logger,
 		Realm:           realm,
+		SigningKey:      signingKey,
 		Resources:       resources,
 		Api:             api,
 		Auth:            auth,
@@ -84,66 +99,75 @@ func (h *ProxyHandler) exhaust(r *http.Request) {
 	}
 }
 
-// unauth returns 401 with proper headers
-func (h *ProxyHandler) unauth(r *http.Request, w http.ResponseWriter, msg string) {
-	w.Header().Add(http.CanonicalHeaderKey("WWW-Authenticate"), fmt.Sprintf("Basic realm=%s", h.Realm))
-	http.Error(w, "Missing auth credentials", http.StatusUnauthorized)
-	h.exhaust(r)
-}
-
 // ServeHTTP implements http.Handler
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
-	// Check healthz
+	// Check unprotected paths: /healthz and /resources
+	if strings.HasPrefix(r.URL.Path, RESOURCEPATH) {
+		h.Logger.Debug("Triggering resource path")
+		h.resourceHandler.ServeHTTP(w, r)
+		return
+	}
 	if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
+		h.Logger.Debug("Triggering healthz path")
 		h.healthz(w, r)
 		return
 	}
 
-	// Extract service, username and pass from basic auth
-	user, pass, ok := r.BasicAuth()
-	contextLog := h.Logger.WithFields(log.Fields{
-		"url":  r.URL.String(),
-		"user": user,
-	})
-	if !ok {
-		h.unauth(r, w, "Missing auth credentials")
-		return
-	}
-	if !strings.Contains(user, "/") {
-		h.unauth(r, w, "Missing service name")
-		return
-	}
-	part := strings.SplitN(user, "/", 2)
-	cred := Credentials{
-		Service:  strings.TrimSpace(part[0]),
-		Username: strings.TrimSpace(part[1]),
-	}
-	pass = strings.TrimSpace(pass)
-	if cred.Service == "" || cred.Username == "" || pass == "" {
-		h.unauth(r, w, "Empty service name, user or password")
-		return
-	}
-
-	// Check auth credentials
-	session, err := h.Auth.Login(cred, pass, cred.Hash(pass))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// Handle login path
+	if strings.HasPrefix(r.URL.Path, LOGINPATH) {
+		if r.Method == http.MethodGet {
+			h.Logger.Debug("Triggering login GET path")
+			h.loginPage(w, r, "")
+			return
+		}
+		if r.Method == http.MethodPost {
+			h.Logger.Debug("Triggering login POST path")
+			h.LoginForm(w, r)
+			return
+		}
+		http.Error(w, "Unsupported HTTP Method", http.StatusBadRequest)
 		h.exhaust(r)
 		return
 	}
-	if session == nil {
-		h.unauth(r, w, "Wrong authorization credentials")
+
+	// Other than that, paths are authenticated by cookie.
+	var authCookie *http.Cookie
+	cookies := r.Cookies()
+	for _, cookie := range cookies {
+		if cookie.Name == SESSIONCOOKIE {
+			authCookie = cookie
+			break
+		}
+	}
+	if authCookie == nil {
+		h.Logger.Debug("No cookie received, redirecto to login page")
+		http.Redirect(w, r, LOGINPATH, http.StatusTemporaryRedirect)
+		h.exhaust(r)
 		return
 	}
 
-	// Get PodManager
-	if strings.HasPrefix(r.URL.Path, RESOURCEPATH) {
-		contextLog.Debug("Triggering resource path")
-		h.resourceHandler.ServeHTTP(w, r)
+	// Check cookie credentials
+	authCred, authSession, err := h.CheckCookie(authCookie)
+	if authSession == nil || err != nil {
+		h.Logger.Debug("Cookie is not valid, redirect to login page")
+		http.Redirect(w, r, LOGINPATH, http.StatusTemporaryRedirect)
+		h.exhaust(r)
 		return
 	}
-	manager, err := h.Factory.Find(h.Api, cred)
+
+	// If authenticated, check logout path
+	if strings.HasPrefix(r.URL.Path, LOGOUTPATH) && r.Method == http.MethodGet {
+		h.Logger.Debug("Triggering LOGOUT GET Path")
+		h.Auth.Logout(authSession)
+		http.SetCookie(w, &http.Cookie{Name: SESSIONCOOKIE, Value: ""})
+		http.Redirect(w, r, LOGINPATH, http.StatusTemporaryRedirect)
+		h.exhaust(r)
+	}
+
+	// Get PodManager
+	contextLog := h.Logger.WithField("cred", authCred)
+	manager, err := h.Factory.Find(h.Api, authCred)
 	if err != nil {
 		contextLog.WithError(err).Error("Failed to get PodManager")
 		http.Error(w, "Failed to get PodManager", http.StatusInternalServerError)
@@ -152,25 +176,26 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Intercept API paths
+	contextLog.WithFields(log.Fields{"method": r.Method, "path": r.URL.Path}).Debug("Routing request")
 	if r.Method == http.MethodGet {
 		if strings.HasPrefix(r.URL.Path, ERRORPATH) {
 			contextLog.Debug("Triggering error path")
-			h.errorPage(contextLog, w, r, manager, cred)
+			h.errorPage(contextLog, w, r, manager, authCred)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, KILLPATH) {
 			contextLog.Debug("Triggering kill path")
-			h.killPage(contextLog, w, r, manager, cred)
+			h.killPage(contextLog, w, r, manager, authCred)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, SPAWNPATH) {
 			contextLog.Debug("Triggering spawn path")
-			h.spawnPage(contextLog, w, r, manager, cred)
+			h.spawnPage(contextLog, w, r, manager, authCred)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, WAITPATH) {
 			contextLog.Debug("Triggering wait path")
-			h.waitPage(contextLog, w, r, manager, cred)
+			h.waitPage(contextLog, w, r, manager, authCred)
 			return
 		}
 	}
@@ -184,7 +209,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if proxy == nil {
-		// Redirct only root path, to avoid returning text/html when
+		// Redirect only root path, to avoid returning text/html when
 		// the client requests other resources, like css, js, etc.
 		if r.Method == http.MethodGet && r.URL.Path != "/" {
 			http.Error(w, "Pod IP not found", http.StatusNotFound)
@@ -199,6 +224,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.exhaust(r)
 		return
 	}
+	// TODO: Refresh cookie in response headers
 	proxy.ServeHTTP(w, r)
 }
 
@@ -223,6 +249,100 @@ func (h *ProxyHandler) healthz(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(version.String()))
 	}
 	h.exhaust(r)
+}
+
+// LoginForm processes the login form and sets a cookie
+func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
+
+	// Get credentials
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Failed to parse form data", http.StatusBadRequest)
+		h.exhaust(r)
+		return
+	}
+	cred := Credentials{
+		Service:  strings.TrimSpace(r.Form.Get("service")),
+		Username: strings.TrimSpace(r.Form.Get("username")),
+	}
+	pass := strings.TrimSpace(r.Form.Get("password"))
+
+	// Check if parameters are empty
+	if cred.Service == "" || cred.Username == "" || pass == "" {
+		h.loginPage(w, r, "Empty service name, user or password")
+		return
+	}
+	loggerCtx := h.Logger.WithFields(log.Fields{"service": cred.Service, "username": cred.Username})
+
+	// Get session and check parameters
+	session, err := h.Auth.Login(cred, pass, 0)
+	if err != nil {
+		loggerCtx.WithError(err).Error("Failed to login")
+		h.loginPage(w, r, err.Error())
+		return
+	}
+	if session == nil {
+		loggerCtx.Info("Wrong credentials")
+		h.loginPage(w, r, "Wrong credentials")
+		return
+	}
+
+	// If authentication succeeds, create token
+	loggerCtx.Info("Authentication succeeded")
+	// TODO: Add timestamps to claims
+	claims := CustomClaims{
+		Service:  cred.Service,
+		Username: cred.Username,
+		Hash:     session.Hash,
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, &claims).SignedString(h.SigningKey)
+	if err != nil {
+		loggerCtx.WithError(err).Error("Failed to sign token")
+		h.loginPage(w, r, err.Error())
+		return
+	}
+
+	// Set the cookie and go for the home page
+	loggerCtx.WithFields(log.Fields{"claims": claims, "token": token}).Debug("Storing JWT token in cookie")
+	http.SetCookie(w, &http.Cookie{
+		Name:    SESSIONCOOKIE,
+		Value:   token,
+		Expires: session.Expiration,
+		Path:    "/",
+	})
+	// Redirect with "SeeOther" to turn POST into GET
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+	h.exhaust(r)
+}
+
+func (h *ProxyHandler) CheckCookie(cookie *http.Cookie) (Credentials, *AuthSession, error) {
+	var claims CustomClaims
+	token, err := jwt.ParseWithClaims(cookie.Value, &claims, func(token *jwt.Token) (interface{}, error) {
+		return h.SigningKey, nil
+	})
+	if err != nil || !token.Valid {
+		h.Logger.WithError(err).Error("Failed to parse token")
+		return Credentials{}, nil, err
+	}
+	// TODO: Check cookie and token expirations
+	loggerCtx := h.Logger.WithFields(log.Fields{
+		"service":  claims.Service,
+		"username": claims.Username,
+		"hash":     claims.Hash,
+	})
+	creds := Credentials{
+		Service:  claims.Service,
+		Username: claims.Username,
+	}
+	session, err := h.Auth.Check(creds, claims.Hash)
+	if err != nil {
+		loggerCtx.WithError(err).Error("Error while getting session")
+		return creds, nil, err
+	}
+	if session == nil {
+		loggerCtx.WithError(err).Error("Logging session not found")
+		return creds, nil, nil
+	}
+	return creds, session, nil
 }
 
 func NewParams(cred Credentials, info PodInfo) TemplateParams {
@@ -255,6 +375,17 @@ func (h *ProxyHandler) render(logger *log.Entry, w http.ResponseWriter, r *http.
 	params := NewParams(cred, info)
 	if err := h.templateGroup.ExecuteTemplate(w, name, params); err != nil {
 		logger.WithField("params", params).WithError(err).Error("Failed to render template")
+	}
+}
+
+type LoginParams struct {
+	Message string
+}
+
+func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, msg string) {
+	defer h.exhaust(r)
+	if err := h.templateGroup.ExecuteTemplate(w, LoginTemplate, LoginParams{Message: msg}); err != nil {
+		h.Logger.WithError(err).Error("Failed to render login template")
 	}
 }
 

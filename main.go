@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"embed"
 	"io/fs"
 	"net/http"
@@ -81,7 +82,9 @@ func main() {
 	// TODO: Get resourceDir from environment variable
 	resourceDir := "resources"
 	logger.WithFields(log.Fields{"realm": REALM, "resources": resourceDir}).Info("Building proxy server")
-	proxy, err := NewServer(logger, REALM, localResources(logger, resourceDir), api, auth, factory)
+	signingKey := make([]byte, 64)
+	rand.Read(signingKey) // Generate random signing key. For a single server is enough.
+	proxy, err := NewServer(logger, REALM, signingKey, localResources(logger, resourceDir), api, auth, factory)
 	if err != nil {
 		panic(err)
 	}

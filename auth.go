@@ -57,7 +57,7 @@ func NewAuth(logger *log.Logger, lifetime time.Duration) *AuthManager {
 	manager := &AuthManager{
 		Logger:    logger,
 		cache:     make(map[Credentials]*AuthSession),
-		loginHash: make([]UnixTimestamp, 0, 1<<LOGIN_HASH_BITS),
+		loginHash: make([]UnixTimestamp, 1<<LOGIN_HASH_BITS),
 		Lifetime:  lifetime,
 	}
 	manager.Tick(time.Second)
@@ -133,6 +133,12 @@ func (m *AuthManager) Login(cred Credentials, password string, hash uint32) (*Au
 		}()
 	}
 	return session, nil
+}
+
+func (m *AuthManager) Logout(session *AuthSession) {
+	m.Mutex.Lock()
+	session.Logout = true
+	m.Mutex.Unlock()
 }
 
 func (m *AuthManager) Watch(ctx context.Context, cred Credentials, session *AuthSession) {

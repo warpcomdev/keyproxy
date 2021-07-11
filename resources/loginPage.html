@@ -1,0 +1,27 @@
+<html>
+
+<head>
+    <link rel="stylesheet" href="/resources/css/default.css" />
+</head>
+
+<body>
+    <div id="frame">
+        <div id="login">
+            <form method="POST" action="/podapi/login">
+                <table>
+                    <tr><th>Username:</th><td><input type="text" name="username" id="username"/></td></tr>
+                    <tr><th>Password:</th><td><input type="password" name="password" id="username"/></td></tr>
+                    <tr><th>Service:</th><td><input type="text" name="service" id="service"/></td></tr>
+                    <tr><td colspan="2"><input type="submit" name="submit" id="submit" value="Submit"/></td></tr>
+                </table>
+            </form>
+        </div>
+        {{ with .Message }}
+        <div id="loginmessage">
+            <p>{{ . }}</p>
+        </div>
+        {{ end }}
+    </div>
+</body>
+
+</html>
