@@ -1,10 +1,8 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"hash/fnv"
-	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -28,33 +26,22 @@ type Credentials struct {
 
 // AuthManager handles credential resolution, ratelimit and cache
 type AuthManager struct {
-	// AtomicTimestamp must be at the top of the struct
-	timestamp AtomicTimestamp
-	Logger    *log.Logger
+	// TimeKeeper must be at the top of the struct
+	TimeKeeper
+	Logger *log.Logger
 	// cache TODO: expire cached credentials. Is it worth it? there won't be so many.
-	cache      map[uint64]UnixTimestamp
-	loginHash  []UnixTimestamp
-	mutex      sync.Mutex
-	cancelCtx  context.Context
-	cancelFunc context.CancelFunc
-	waitGroup  sync.WaitGroup
+	cache     map[uint64]UnixTimestamp
+	loginHash []UnixTimestamp
 }
 
 // NewAuth creates new Auth Manager
 func NewAuth(logger *log.Logger) *AuthManager {
-	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 	manager := &AuthManager{
-		Logger:     logger,
-		cache:      make(map[uint64]UnixTimestamp),
-		loginHash:  make([]UnixTimestamp, 0, 1<<LOGIN_HASH_BITS),
-		cancelCtx:  cancelCtx,
-		cancelFunc: cancelFunc,
+		Logger:    logger,
+		cache:     make(map[uint64]UnixTimestamp),
+		loginHash: make([]UnixTimestamp, 0, 1<<LOGIN_HASH_BITS),
 	}
-	manager.waitGroup.Add(1)
-	go func() {
-		defer manager.waitGroup.Done()
-		manager.timestamp.timeKeeper(cancelCtx, time.Second)
-	}()
+	manager.Tick(time.Second)
 	return manager
 }
 
@@ -72,9 +59,9 @@ func hash(cred Credentials, password string) uint64 {
 // Check the credential cache for a match that has not expired yet.
 func (m *AuthManager) Check(cred Credentials, pass string) (bool, error) {
 	credHash := hash(cred, pass)
-	timestamp := m.timestamp.Load()
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+	timestamp := m.Clock()
+	m.Mutex.Lock()
+	defer m.Mutex.Unlock()
 	deadline, ok := m.cache[credHash]
 	if ok && deadline <= timestamp {
 		delete(m.cache, credHash)
@@ -130,8 +117,8 @@ func (m *AuthManager) refresh(cred Credentials, pass string, hash uint64, timest
 		return 0, ErrorTooManyAttempts
 	}
 	m.loginHash[bitMask] = timestamp
-	m.mutex.Unlock()
-	defer m.mutex.Lock()
+	m.Mutex.Unlock()
+	defer m.Mutex.Lock()
 	deadline, err := m.login(cred, pass)
 	// Make sure there is room enough for token renewal
 	if deadline > 0 && deadline < timestamp+2*GRACE_PERIOD_SECONDS {
@@ -143,17 +130,4 @@ func (m *AuthManager) refresh(cred Credentials, pass string, hash uint64, timest
 // login must be called with the mutex NOT held
 func (m *AuthManager) login(cred Credentials, pass string) (UnixTimestamp, error) {
 	return UnixTimestamp(time.Now().Unix() + 3600), nil
-}
-
-func (m *AuthManager) Cancel() {
-	m.mutex.Lock()
-	cancelFunc := m.cancelFunc
-	if cancelFunc == nil {
-		m.mutex.Unlock()
-		return
-	}
-	m.cancelFunc = nil
-	m.mutex.Unlock()
-	cancelFunc()
-	m.waitGroup.Wait()
 }

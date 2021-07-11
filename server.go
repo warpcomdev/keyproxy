@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/masterminds/sprig"
 	log "github.com/sirupsen/logrus"
@@ -41,6 +42,9 @@ type TemplateParams struct {
 
 // ProxyHandler manages the pod lifecycle requests and proxies other requests.
 type ProxyHandler struct {
+	// lastHealth must be first because it is atomic
+	lastHealth AtomicTimestamp
+	TimeKeeper
 	Logger          *log.Logger
 	Realm           string
 	Resources       fs.FS
@@ -58,7 +62,7 @@ func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, 
 		logger.WithError(err).Error("Failed to load templates")
 		return nil, err
 	}
-	return &ProxyHandler{
+	handler := &ProxyHandler{
 		Logger:          logger,
 		Realm:           realm,
 		Resources:       resources,
@@ -67,7 +71,9 @@ func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, 
 		Factory:         factory,
 		resourceHandler: http.StripPrefix(RESOURCEPATH, http.FileServer(http.FS(resources))),
 		templateGroup:   templateGroup,
-	}, nil
+	}
+	handler.Tick(time.Second)
+	return handler, nil
 }
 
 // Exhaust the request body to avoid men leaks
@@ -87,6 +93,12 @@ func (h *ProxyHandler) unauth(r *http.Request, w http.ResponseWriter, msg string
 
 // ServeHTTP implements http.Handler
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+
+	// Check healthz
+	if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
+		h.healthz(w, r)
+		return
+	}
 
 	// Extract service, username and pass from basic auth
 	user, pass, ok := r.BasicAuth()
@@ -140,25 +152,27 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Intercept API paths
-	if strings.HasPrefix(r.URL.Path, ERRORPATH) {
-		contextLog.Debug("Triggering error path")
-		h.errorPage(contextLog, w, r, manager, cred)
-		return
-	}
-	if strings.HasPrefix(r.URL.Path, KILLPATH) {
-		contextLog.Debug("Triggering kill path")
-		h.killPage(contextLog, w, r, manager, cred)
-		return
-	}
-	if strings.HasPrefix(r.URL.Path, SPAWNPATH) {
-		contextLog.Debug("Triggering spawn path")
-		h.spawnPage(contextLog, w, r, manager, cred)
-		return
-	}
-	if strings.HasPrefix(r.URL.Path, WAITPATH) {
-		contextLog.Debug("Triggering wait path")
-		h.waitPage(contextLog, w, r, manager, cred)
-		return
+	if r.Method == http.MethodGet {
+		if strings.HasPrefix(r.URL.Path, ERRORPATH) {
+			contextLog.Debug("Triggering error path")
+			h.errorPage(contextLog, w, r, manager, cred)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, KILLPATH) {
+			contextLog.Debug("Triggering kill path")
+			h.killPage(contextLog, w, r, manager, cred)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, SPAWNPATH) {
+			contextLog.Debug("Triggering spawn path")
+			h.spawnPage(contextLog, w, r, manager, cred)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, WAITPATH) {
+			contextLog.Debug("Triggering wait path")
+			h.waitPage(contextLog, w, r, manager, cred)
+			return
+		}
 	}
 
 	// By default, proxy to backend
@@ -172,7 +186,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if proxy == nil {
 		// Redirct only root path, to avoid returning text/html when
 		// the client requests other resources, like css, js, etc.
-		if r.URL.Path != "/" {
+		if r.Method == http.MethodGet && r.URL.Path != "/" {
 			http.Error(w, "Pod IP not found", http.StatusNotFound)
 			h.exhaust(r)
 			return
@@ -186,6 +200,29 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+func (h *ProxyHandler) healthz(w http.ResponseWriter, r *http.Request) {
+	// Rate limit health cheks to avoid abuse
+	lastHealth := h.lastHealth.Load()
+	timestamp := h.Clock()
+	if lastHealth >= timestamp {
+		http.Error(w, "Rate limit health checks", http.StatusInternalServerError)
+		h.exhaust(r)
+		return
+	}
+	h.lastHealth.Store(timestamp)
+	// Check kubernetes connection
+	version, err := h.Api.client.ServerVersion()
+	if err != nil {
+		h.Logger.WithError(err).Error("Failed health check")
+		http.Error(w, "Failed health check", http.StatusInternalServerError)
+	} else {
+		w.Header().Add(http.CanonicalHeaderKey("Content-Type"), "text/plain; encoding=utf-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(version.String()))
+	}
+	h.exhaust(r)
 }
 
 func NewParams(cred Credentials, info PodInfo) TemplateParams {

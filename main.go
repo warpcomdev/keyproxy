@@ -78,6 +78,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	defer proxy.Cancel()
 
 	logger.WithField("port", 8080).Info("Starting service")
 	srv := &http.Server{

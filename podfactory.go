@@ -2,9 +2,7 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"errors"
-	"sync"
 	"text/template"
 	"time"
 
@@ -19,46 +17,34 @@ const (
 var ErrorFactoryCancelled = errors.New("PodFactory is being cancelled")
 
 type PodFactory struct {
-	// AtomicTimestamp must be at the top of the struct for atomic calls
-	timestamp AtomicTimestamp
-	Logger    *log.Logger
-	Template  *template.Template
-	Scheme    string
-	Port      int
-	managers  map[Credentials]*PodManager
-	mutex     sync.Mutex
-	waitGroup sync.WaitGroup
-	// cancelCtx used for management of channel lifetimes
-	cancelCtx  context.Context
-	cancelFunc context.CancelFunc
+	// TimeKeeper must be at the top of the struct for atomic calls
+	TimeKeeper
+	Logger   *log.Logger
+	Template *template.Template
+	Scheme   string
+	Port     int
+	managers map[Credentials]*PodManager
 }
 
 // NewFactory creates a Factory for PodManagers
 func NewFactory(logger *log.Logger, tmpl *template.Template, scheme string, port int) *PodFactory {
-	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 	factory := &PodFactory{
-		Logger:     logger,
-		Template:   tmpl,
-		Scheme:     scheme,
-		Port:       port,
-		managers:   make(map[Credentials]*PodManager),
-		cancelCtx:  cancelCtx,
-		cancelFunc: cancelFunc,
+		Logger:   logger,
+		Template: tmpl,
+		Scheme:   scheme,
+		Port:     port,
+		managers: make(map[Credentials]*PodManager),
 	}
 	// Keep track of time
-	factory.waitGroup.Add(1)
-	go func() {
-		defer factory.waitGroup.Done()
-		factory.timestamp.timeKeeper(cancelCtx, time.Second)
-	}()
+	factory.Tick(time.Second)
 	return factory
 }
 
 // Find manager for the given credentials.
 func (f *PodFactory) Find(api *KubeAPI, creds Credentials) (*PodManager, error) {
 	ctxLogger := f.Logger.WithField("creds", creds)
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
+	f.Mutex.Lock()
+	defer f.Mutex.Unlock()
 	mgr, ok := f.managers[creds]
 	if !ok {
 		if f.cancelFunc == nil {
@@ -72,7 +58,7 @@ func (f *PodFactory) Find(api *KubeAPI, creds Credentials) (*PodManager, error) 
 		}
 		f.managers[creds] = mgr
 	}
-	mgr.Timestamp.Store(f.timestamp.Load())
+	mgr.Timestamp.Store(f.Clock())
 	return mgr, nil
 }
 
@@ -92,31 +78,16 @@ func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, e
 		Scheme:     f.Scheme,
 		Port:       f.Port,
 	}
-	f.waitGroup.Add(1)
+	f.Group.Add(1)
 	err = manager.Watch(f.cancelCtx, api, POD_LIFETIME, func() {
-		defer f.waitGroup.Done()
-		f.mutex.Lock()
+		defer f.Group.Done()
+		f.Mutex.Lock()
 		delete(f.managers, creds)
-		f.mutex.Unlock()
+		f.Mutex.Unlock()
 	})
 	if err != nil {
-		f.waitGroup.Done() // since cleanup functon above won't be called
+		f.Group.Done() // since cleanup functon above won't be called
 		return nil, err
 	}
 	return manager, nil
-}
-
-// Cancel all the watches and wait for termination
-func (f *PodFactory) Cancel() {
-	var cancelFunc context.CancelFunc
-	f.mutex.Lock()
-	if f.cancelFunc == nil {
-		f.mutex.Unlock()
-		return
-	}
-	cancelFunc = f.cancelFunc
-	f.cancelFunc = nil
-	f.mutex.Unlock()
-	cancelFunc()
-	f.waitGroup.Wait()
 }
