@@ -230,11 +230,12 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if info.Type == Deleted || info.Phase == PodFailed || info.Phase == PodSucceeded || info.Phase == PodUnknown {
 			redirectPath = ERRORPATH
 		}
-		http.Redirect(w, r, redirectPath, http.StatusTemporaryRedirect)
+		http.Redirect(w, r, redirectPath, statusRedirect)
 		h.exhaust(r)
 		return
 	}
-	// TODO: Refresh cookie in response headers
+	// TODO: Only change proxy session when actually needed
+	proxy.CurrentSession(authSession)
 	proxy.ServeHTTP(w, r)
 }
 

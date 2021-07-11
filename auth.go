@@ -43,7 +43,10 @@ type AuthSession struct {
 	expiration time.Time
 	// hash is used for rate limiting
 	hash uint32
-	// logout is used for delayed logout
+	// logout is used for delayed logout.
+	// It is protected by the AuthManager lock, not the AuthSession log.
+	// i.e. AuthSession never uses it. Only AuthManager uses it,
+	// and it is always used with the mutex below unheld.
 	logout bool
 	// JWT is used for Auth
 	jwtToken string
@@ -51,6 +54,9 @@ type AuthSession struct {
 	mutex    sync.Mutex
 }
 
+// Update JWT Token based on credentials and time.
+// The updated JWT token might be empty (""), even if
+// The JWT Error is nil too.
 func (s *AuthSession) updateJWT(cred Credentials, token string, expiration time.Time, method jwt.SigningMethod, keyFunc jwt.Keyfunc) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()

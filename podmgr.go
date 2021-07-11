@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"sync"
@@ -24,7 +25,7 @@ type PodManager struct {
 	Port   int
 	// latest status detected and resulting reverse proxy
 	latest PodInfo
-	proxy  *httputil.ReverseProxy
+	proxy  *PodProxy
 	// PendingDelete is set to true when pod is being destroyed
 	pendingDelete bool
 	// Mutex that protects everything
@@ -34,7 +35,7 @@ type PodManager struct {
 // Proxy returns a httputil.ReverseProxy instance to current pod's IP.
 // If create == true, the pod will be scheduled for creation if not existing.
 // Beware that the proxy might be nil if no IP, even when error == nil.
-func (m *PodManager) Proxy(ctx context.Context, api *KubeAPI, create bool) (*httputil.ReverseProxy, PodInfo, error) {
+func (m *PodManager) Proxy(ctx context.Context, api *KubeAPI, create bool) (*PodProxy, PodInfo, error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	if err := m.updateStatus(ctx, api, create); err != nil {
@@ -148,12 +149,44 @@ func (m *PodManager) Watch(ctx context.Context, api *KubeAPI, lifetime time.Dura
 	return nil
 }
 
+type PodProxy struct {
+	*httputil.ReverseProxy
+	jwtMutex   sync.Mutex
+	jwtSession *AuthSession
+}
+
+func (p *PodProxy) CurrentSession(session *AuthSession) {
+	p.jwtMutex.Lock()
+	p.jwtSession = session
+	p.jwtMutex.Unlock()
+}
+
 // reverseProxy builds the reverse proxy instance.
-func (m *PodManager) reverseProxy(address string) *httputil.ReverseProxy {
+func (m *PodManager) reverseProxy(address string) *PodProxy {
 	target := &url.URL{
 		Scheme: m.Scheme,
 		Host:   fmt.Sprintf("%s:%d", address, m.Port),
 	}
-	tp := httputil.NewSingleHostReverseProxy(target)
+	tp := &PodProxy{
+		ReverseProxy: httputil.NewSingleHostReverseProxy(target),
+	}
+	// Refresh cookie in proxy response
+	tp.ModifyResponse = func(response *http.Response) error {
+		tp.jwtMutex.Lock()
+		session := tp.jwtSession
+		tp.jwtMutex.Unlock()
+		token, exp, err := session.JWT()
+		if err != nil && token != "" {
+			cookie := http.Cookie{
+				Name:     SESSIONCOOKIE,
+				Value:    token,
+				Expires:  exp,
+				Path:     "/",
+				HttpOnly: true,
+			}
+			response.Header.Add("Set-Cookie", cookie.String())
+		}
+		return nil
+	}
 	return tp
 }
