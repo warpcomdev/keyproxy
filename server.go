@@ -126,13 +126,13 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check auth credentials
-	ok, err := h.Auth.Check(cred, pass)
+	session, err := h.Auth.Login(cred, pass, cred.Hash(pass))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		h.exhaust(r)
 		return
 	}
-	if !ok {
+	if session == nil {
 		h.unauth(r, w, "Wrong authorization credentials")
 		return
 	}

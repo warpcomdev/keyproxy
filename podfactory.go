@@ -9,11 +9,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// POD_LIFETIME: Destroy pod after this long without activity
-const (
-	POD_LIFETIME = 2 * time.Hour
-)
-
 var ErrorFactoryCancelled = errors.New("PodFactory is being cancelled")
 
 type PodFactory struct {
@@ -21,16 +16,18 @@ type PodFactory struct {
 	TimeKeeper
 	Logger   *log.Logger
 	Template *template.Template
+	Lifetime time.Duration
 	Scheme   string
 	Port     int
 	managers map[Credentials]*PodManager
 }
 
 // NewFactory creates a Factory for PodManagers
-func NewFactory(logger *log.Logger, tmpl *template.Template, scheme string, port int) *PodFactory {
+func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Duration, scheme string, port int) *PodFactory {
 	factory := &PodFactory{
 		Logger:   logger,
 		Template: tmpl,
+		Lifetime: lifetime,
 		Scheme:   scheme,
 		Port:     port,
 		managers: make(map[Credentials]*PodManager),
@@ -79,7 +76,7 @@ func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, e
 		Port:       f.Port,
 	}
 	f.Group.Add(1)
-	err = manager.Watch(f.cancelCtx, api, POD_LIFETIME, func() {
+	err = manager.Watch(f.cancelCtx, api, f.Lifetime, func() {
 		defer f.Group.Done()
 		f.Mutex.Lock()
 		delete(f.managers, creds)

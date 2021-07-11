@@ -40,6 +40,13 @@ func (t *AtomicTimestamp) Tick(ctx context.Context, step time.Duration) {
 	}
 }
 
+// Remaining time until expiration, considering the given lifetime
+func (t *AtomicTimestamp) Remaining(lifetime time.Duration) time.Duration {
+	now := UnixTimestamp(time.Now().Unix())
+	timestamp := t.Load()
+	return time.Duration(timestamp+UnixTimestamp(lifetime/time.Second)-now) * time.Second
+}
+
 type TimeKeeper struct {
 	// Must be the first field in every embedding struct
 	timestamp  AtomicTimestamp

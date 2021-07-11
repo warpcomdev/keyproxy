@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"text/template"
+	"time"
 
 	"github.com/masterminds/sprig"
 	log "github.com/sirupsen/logrus"
@@ -16,6 +17,12 @@ const (
 	PODCONFIG = "configs/pod.yaml"
 	REALM     = "KeyProxy Auth"
 )
+
+// POD_LIFETIME: Destroy pod after this long without activity
+const POD_LIFETIME = 2 * time.Hour
+
+// SESSION_LIFETIME: Destroy session after this long without activity
+const SESSION_LIFETIME = 20 * time.Minute
 
 //go:embed resources/*
 var resources embed.FS
@@ -58,7 +65,7 @@ func main() {
 	}
 
 	logger.WithFields(log.Fields{"port": 8080}).Info("Building pod factory")
-	factory := NewFactory(logger, tmpl, "http", 8080)
+	factory := NewFactory(logger, tmpl, POD_LIFETIME, "http", 8080)
 	defer factory.Cancel()
 
 	logger.Info("Connecting to kubernetes API")
@@ -68,7 +75,7 @@ func main() {
 	}
 
 	logger.Info("Building auth manager")
-	auth := NewAuth(logger)
+	auth := NewAuth(logger, SESSION_LIFETIME)
 	defer auth.Cancel()
 
 	// TODO: Get resourceDir from environment variable

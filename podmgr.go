@@ -110,15 +110,13 @@ func (m *PodManager) Watch(ctx context.Context, api *KubeAPI, lifetime time.Dura
 		for {
 			select {
 			case <-timer.C:
-				now := UnixTimestamp(time.Now().Unix())
-				timestamp := m.Timestamp.Load()
-				remaining := timestamp + UnixTimestamp(lifetime/time.Second) - now
+				remaining := m.Timestamp.Remaining(lifetime)
 				if remaining <= 0 {
 					loggerCtx.Info("Watch thread expired, deleting pod")
 					m.Delete(ctx, api)
 					return
 				}
-				timer = time.NewTimer(time.Duration(remaining+1) * time.Second)
+				timer = time.NewTimer(remaining + time.Second)
 			case <-ctx.Done():
 				loggerCtx.Info("Watch thread context cancelled")
 				timer.Stop()
