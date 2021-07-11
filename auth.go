@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"hash/fnv"
+	"sync"
 	"time"
 
+	"github.com/golang-jwt/jwt"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -16,6 +18,7 @@ const (
 
 var ErrorTooManyAttempts = errors.New("Too many concurrent auth attempts")
 var ErrorAuthCancelled = errors.New("AuthManager is being cancelled")
+var ErrorInvalidWebToken = errors.New("Web Token is not valid, check your clock")
 
 // Credentials for authentication
 type Credentials struct {
@@ -34,11 +37,53 @@ func (cred Credentials) Hash(password string) uint32 {
 
 // AuthSession keeps authentication session status
 type AuthSession struct {
-	AccessTime AtomicTimestamp
-	Token      string
-	Expiration time.Time
-	Hash       uint32
-	Logout     bool
+	// accessTime, Token and Expiration are used for session refresh
+	accessTime AtomicTimestamp
+	token      string
+	expiration time.Time
+	// hash is used for rate limiting
+	hash uint32
+	// logout is used for delayed logout
+	logout bool
+	// JWT is used for Auth
+	jwtToken string
+	jwtError error
+	mutex    sync.Mutex
+}
+
+func (s *AuthSession) updateJWT(cred Credentials, token string, expiration time.Time, method jwt.SigningMethod, keyFunc jwt.Keyfunc) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.expiration = expiration
+	s.token = token
+	now := time.Now()
+	jwtToken := jwt.NewWithClaims(method, jwt.StandardClaims{
+		ExpiresAt: s.expiration.Add(time.Minute).Unix(),
+		IssuedAt:  now.Unix(),
+		Issuer:    cred.Service,
+		NotBefore: now.Add(-time.Minute).Unix(),
+		Subject:   cred.Username,
+	})
+	key, err := keyFunc(jwtToken)
+	if err != nil {
+		s.jwtError = err
+		return err
+	}
+	jwtString, err := jwtToken.SignedString(key)
+	if err != nil {
+		s.jwtError = err
+		return err
+	}
+	s.jwtError = nil
+	s.jwtToken = jwtString
+	return nil
+}
+
+// JWT returns the signedJWT along with an expiration time for cookies
+func (s *AuthSession) JWT() (string, time.Time, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return s.jwtToken, s.expiration, s.jwtError
 }
 
 // AuthManager handles credential resolution, ratelimit and cache
@@ -47,84 +92,83 @@ type AuthManager struct {
 	TimeKeeper
 	Logger   *log.Logger
 	Lifetime time.Duration
+	// For token signing
+	SigningMethod jwt.SigningMethod
+	KeyFunc       jwt.Keyfunc
 	// cache TODO: expire cached credentials. Is it worth it? there won't be so many.
 	cache     map[Credentials]*AuthSession
 	loginHash []UnixTimestamp
 }
 
 // NewAuth creates new Auth Manager
-func NewAuth(logger *log.Logger, lifetime time.Duration) *AuthManager {
+func NewAuth(logger *log.Logger, lifetime time.Duration, signingMethod jwt.SigningMethod, keyFunc jwt.Keyfunc) *AuthManager {
 	manager := &AuthManager{
-		Logger:    logger,
-		cache:     make(map[Credentials]*AuthSession),
-		loginHash: make([]UnixTimestamp, 1<<LOGIN_HASH_BITS),
-		Lifetime:  lifetime,
+		Logger:        logger,
+		Lifetime:      lifetime,
+		SigningMethod: signingMethod,
+		KeyFunc:       keyFunc,
+		cache:         make(map[Credentials]*AuthSession),
+		loginHash:     make([]UnixTimestamp, 1<<LOGIN_HASH_BITS),
 	}
 	manager.Tick(time.Second)
 	return manager
 }
 
 // Check the credential cache for a match that has not expired yet.
-func (m *AuthManager) Check(cred Credentials, hash uint32) (*AuthSession, error) {
+func (m *AuthManager) Check(webToken string) (Credentials, *AuthSession, error) {
+	var claims jwt.StandardClaims
+	jwtToken, err := jwt.ParseWithClaims(webToken, &claims, m.KeyFunc)
+	if err != nil {
+		return Credentials{}, nil, err
+	}
+	if !jwtToken.Valid {
+		return Credentials{}, nil, ErrorInvalidWebToken
+	}
+	cred := Credentials{Service: claims.Issuer, Username: claims.Subject}
 	m.Mutex.Lock()
 	defer m.Mutex.Unlock()
 	session, ok := m.cache[cred]
 	if !ok {
-		return nil, nil
+		return cred, nil, nil
 	}
-	if hash != session.Hash || session.Logout {
-		return nil, nil
+	if session.logout {
+		return cred, nil, nil
 	}
-	session.AccessTime.Store(m.Clock())
-	return session, nil
+	session.accessTime.Store(m.Clock())
+	return cred, session, nil
 }
 
 // Login with credentials and password.
-// If hash is provided and matches an existing hash,
-// password is assumed to be ok and not checked.
-func (m *AuthManager) Login(cred Credentials, password string, hash uint32) (*AuthSession, error) {
-
-	// Check if the credentials match an existing hash
-	timestamp := m.Clock()
-	m.Mutex.Lock()
-	defer m.Mutex.Unlock()
-	session, existing := m.cache[cred]
-	if existing && session.Hash == hash && !session.Logout {
-		return session, nil
-	}
-
+func (m *AuthManager) Login(cred Credentials, password string) (*AuthSession, error) {
 	// Rate-limit based on buckets
 	credHash := cred.Hash(password)
 	bitMask := credHash & ((1 << LOGIN_HASH_BITS) - 1)
+	timestamp := m.Clock()
+	m.Mutex.Lock()
 	if m.loginHash[bitMask] >= timestamp {
+		m.Mutex.Unlock()
 		return nil, ErrorTooManyAttempts
 	}
 	m.loginHash[bitMask] = timestamp
+	m.Mutex.Unlock()
 
 	// Fill session data. This is a race, since I release the lock.
-	m.Mutex.Unlock()
 	token, exp, err := m.restLogin(cred, password)
-	m.Mutex.Lock()
 	if err != nil || token == "" {
 		return nil, err
 	}
 
-	// Update session.
-	// If some other thread has updated the session while I was
-	// performing the request, it is the winner... use their session.
-	session, existing = m.cache[cred]
+	// Check if session exists, update it if it does not.
+	m.Mutex.Lock()
+	session, existing := m.cache[cred]
 	if !existing {
 		session = &AuthSession{
-			Hash:   credHash,
-			Logout: true,
+			token:      token,
+			expiration: exp,
+			hash:       credHash,
+			logout:     false,
 		}
-	}
-	session.AccessTime.Store(m.Clock())
-	session.Token = token
-	session.Expiration = exp
-	session.Logout = false
-	// If I'm the winner, I get to run the atcher and store my session
-	if !existing {
+		session.accessTime.Store(timestamp)
 		m.cache[cred] = session
 		m.Group.Add(1)
 		go func() {
@@ -132,12 +176,15 @@ func (m *AuthManager) Login(cred Credentials, password string, hash uint32) (*Au
 			m.Watch(m.cancelCtx, cred, session)
 		}()
 	}
+	m.Mutex.Unlock()
+	session.updateJWT(cred, token, exp, m.SigningMethod, m.KeyFunc)
+	session.accessTime.Store(m.Clock())
 	return session, nil
 }
 
 func (m *AuthManager) Logout(session *AuthSession) {
 	m.Mutex.Lock()
-	session.Logout = true
+	session.logout = true
 	m.Mutex.Unlock()
 }
 
@@ -157,12 +204,14 @@ func (m *AuthManager) Watch(ctx context.Context, cred Credentials, session *Auth
 	for {
 
 		// Calculate remaining time until refresh
-		remaining := session.Expiration.Sub(time.Now())
+		remaining := session.expiration.Sub(time.Now())
 		switch {
 		case remaining <= 0:
 			loggerCtx.Info("Session expired without renewal")
 			timer.Stop()
 			return
+		case remaining > 240*time.Second:
+			remaining -= 120 * time.Second
 		case remaining > 120*time.Second:
 			remaining -= 60 * time.Second
 		case remaining > 60*time.Second:
@@ -173,7 +222,7 @@ func (m *AuthManager) Watch(ctx context.Context, cred Credentials, session *Auth
 		select {
 		// Expiration
 		case <-timer.C:
-			remaining := session.AccessTime.Remaining(m.Lifetime)
+			remaining := session.accessTime.Remaining(m.Lifetime)
 			if remaining <= 0 {
 				loggerCtx.Info("Session thread expired")
 				refresh.Stop()
@@ -182,11 +231,10 @@ func (m *AuthManager) Watch(ctx context.Context, cred Credentials, session *Auth
 			timer = time.NewTimer(remaining + time.Second)
 		// Token refresh
 		case <-refresh.C:
-			token, exp, err := m.restRefresh(cred, session.Token)
+			token, exp, err := m.restRefresh(cred, session.token)
 			if err == nil {
 				if token != "" {
-					session.Expiration = exp
-					session.Token = token
+					session.updateJWT(cred, token, exp, m.SigningMethod, m.KeyFunc)
 				}
 			} else {
 				loggerCtx.WithError(err).Error("Failed to refresh token")

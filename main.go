@@ -10,6 +10,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/golang-jwt/jwt"
 	"github.com/masterminds/sprig"
 	log "github.com/sirupsen/logrus"
 )
@@ -23,7 +24,7 @@ const (
 const POD_LIFETIME = 2 * time.Hour
 
 // SESSION_LIFETIME: Destroy session after this long without activity
-const SESSION_LIFETIME = 20 * time.Minute
+const SESSION_LIFETIME = 1 * time.Hour
 
 //go:embed resources/*
 var resources embed.FS
@@ -76,15 +77,16 @@ func main() {
 	}
 
 	logger.Info("Building auth manager")
-	auth := NewAuth(logger, SESSION_LIFETIME)
+	// Use random signing key. Beware if we ever deploy more than one pod.
+	signingKey := make([]byte, 64)
+	rand.Read(signingKey)
+	auth := NewAuth(logger, SESSION_LIFETIME, jwt.SigningMethodHS256, jwt.Keyfunc(func(*jwt.Token) (interface{}, error) { return signingKey, nil }))
 	defer auth.Cancel()
 
 	// TODO: Get resourceDir from environment variable
 	resourceDir := "resources"
 	logger.WithFields(log.Fields{"realm": REALM, "resources": resourceDir}).Info("Building proxy server")
-	signingKey := make([]byte, 64)
-	rand.Read(signingKey) // Generate random signing key. For a single server is enough.
-	proxy, err := NewServer(logger, REALM, signingKey, localResources(logger, resourceDir), api, auth, factory)
+	proxy, err := NewServer(logger, REALM, localResources(logger, resourceDir), api, auth, factory)
 	if err != nil {
 		panic(err)
 	}
