@@ -10,7 +10,6 @@ import (
 
 	"github.com/masterminds/sprig"
 	log "github.com/sirupsen/logrus"
-	"k8s.io/client-go/util/homedir"
 )
 
 const (
@@ -63,7 +62,7 @@ func main() {
 	defer factory.Cancel()
 
 	logger.Info("Connecting to kubernetes API")
-	api, err := NewAPI(logger, filepath.Join(homedir.HomeDir(), ".kube", "config"), "")
+	api, err := NewAPI(logger)
 	if err != nil {
 		panic(err)
 	}

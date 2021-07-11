@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -19,6 +20,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/homedir"
 )
 
 // PodPhase encapsulates kubernetes own PodPhase type
@@ -77,10 +79,10 @@ type KubeAPI struct {
 	client         *kubernetes.Clientset
 }
 
-func NewAPI(logger *log.Logger, kubeconfigPath, namespace string) (*KubeAPI, error) {
+func NewAPI(logger *log.Logger) (*KubeAPI, error) {
 	k := &KubeAPI{
 		Logger:         logger,
-		KubeconfigPath: kubeconfigPath,
+		KubeconfigPath: filepath.Join(homedir.HomeDir(), ".kube", "config"),
 	}
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -99,10 +101,7 @@ func NewAPI(logger *log.Logger, kubeconfigPath, namespace string) (*KubeAPI, err
 	}
 	k.client = clientset
 	// Get namespace too
-	if namespace == "" {
-		namespace = k.namespace()
-	}
-	k.Namespace = namespace
+	k.Namespace = k.namespace()
 	return k, nil
 }
 
