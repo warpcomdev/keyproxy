@@ -46,9 +46,9 @@ type AuthSession struct {
 	// logout is used for delayed logout.
 	// It is protected by the AuthManager lock, not the AuthSession log.
 	// i.e. AuthSession never uses it. Only AuthManager uses it,
-	// and it is always used with the mutex below unheld.
+	// and it is always used without the mutex below.
 	logout bool
-	// JWT is used for Auth
+	// JWT is used for Auth, and protected by mutex.
 	jwtToken string
 	jwtError error
 	mutex    sync.Mutex
@@ -101,7 +101,7 @@ type AuthManager struct {
 	// For token signing
 	SigningMethod jwt.SigningMethod
 	KeyFunc       jwt.Keyfunc
-	// cache TODO: expire cached credentials. Is it worth it? there won't be so many.
+	// Session cache. Keeps refreshing tokens.
 	cache     map[Credentials]*AuthSession
 	loginHash []UnixTimestamp
 }
@@ -167,7 +167,9 @@ func (m *AuthManager) Login(cred Credentials, password string) (*AuthSession, er
 	// Check if session exists, update it if it does not.
 	m.Mutex.Lock()
 	session, existing := m.cache[cred]
-	if !existing {
+	if existing {
+		session.logout = false
+	} else {
 		session = &AuthSession{
 			token:      token,
 			expiration: exp,
@@ -198,6 +200,7 @@ func (m *AuthManager) Watch(ctx context.Context, cred Credentials, session *Auth
 	// When the watch is done, remove the session from cache
 	defer func() {
 		m.Mutex.Lock()
+		session.logout = true
 		delete(m.cache, cred)
 		m.Mutex.Unlock()
 	}()
@@ -241,6 +244,8 @@ func (m *AuthManager) Watch(ctx context.Context, cred Credentials, session *Auth
 			if err == nil {
 				if token != "" {
 					session.updateJWT(cred, token, exp, m.SigningMethod, m.KeyFunc)
+				} else {
+					loggerCtx.Info("Failed to refresh token")
 				}
 			} else {
 				loggerCtx.WithError(err).Error("Failed to refresh token")

@@ -79,7 +79,8 @@ type KubeAPI struct {
 	client         *kubernetes.Clientset
 }
 
-func NewAPI(logger *log.Logger) (*KubeAPI, error) {
+// NewAPI tries to build API by autodiscovering cluster and namespace
+func NewAPI(logger *log.Logger, namespace string) (*KubeAPI, error) {
 	k := &KubeAPI{
 		Logger:         logger,
 		KubeconfigPath: filepath.Join(homedir.HomeDir(), ".kube", "config"),
@@ -101,7 +102,10 @@ func NewAPI(logger *log.Logger) (*KubeAPI, error) {
 	}
 	k.client = clientset
 	// Get namespace too
-	k.Namespace = k.namespace()
+	if namespace == "" {
+		namespace = k.namespace()
+	}
+	k.Namespace = namespace
 	return k, nil
 }
 
@@ -152,6 +156,8 @@ func (k *KubeAPI) WatchPod(ctx context.Context, name string) (<-chan PodInfo, er
 	return events, nil
 }
 
+// forwardEvents forwards events from watch to events chan.
+// exhaust the event channel to make sure the thread is done.
 func (k *KubeAPI) forwardEvents(ctx context.Context, name string, stream watch.Interface, events chan<- PodInfo) {
 	defer close(events)
 	loggerCtx := k.Logger.WithField("name", name)
@@ -183,6 +189,7 @@ func (k *KubeAPI) forwardEvents(ctx context.Context, name string, stream watch.I
 	}
 }
 
+// DeletePod destroys pod by name
 func (k *KubeAPI) DeletePod(ctx context.Context, name string) error {
 	err := k.client.CoreV1().Pods(k.Namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil && kerrors.IsNotFound(err) {
@@ -192,6 +199,7 @@ func (k *KubeAPI) DeletePod(ctx context.Context, name string) error {
 	return err
 }
 
+// Decode reads the yaml descriptor for a pod
 func (k *KubeAPI) Decode(template string) (*PodDescriptor, error) {
 	decoder := scheme.Codecs.UniversalDeserializer()
 	obj, _, err := decoder.Decode([]byte(template), nil, nil)
@@ -205,6 +213,7 @@ func (k *KubeAPI) Decode(template string) (*PodDescriptor, error) {
 	return pod, nil
 }
 
+// CreatePod with given PodDescriptor
 func (k *KubeAPI) CreatePod(ctx context.Context, desc *PodDescriptor) error {
 	pod, err := k.client.CoreV1().Pods(k.Namespace).Create(ctx, desc, metav1.CreateOptions{})
 	if err != nil {
@@ -216,6 +225,7 @@ func (k *KubeAPI) CreatePod(ctx context.Context, desc *PodDescriptor) error {
 	return nil
 }
 
+// cast generic runtimeObject to Pod
 func (k *KubeAPI) castPod(obj runtime.Object) (*v1.Pod, error) {
 	gvk := obj.GetObjectKind().GroupVersionKind()
 	if gvk.Kind != "" && gvk.Kind != "Pod" {

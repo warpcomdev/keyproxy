@@ -83,7 +83,7 @@ func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, e
 		f.Mutex.Unlock()
 	})
 	if err != nil {
-		f.Group.Done() // since cleanup functon above won't be called
+		f.Group.Done() // since cleanup function above won't be called
 		return nil, err
 	}
 	return manager, nil

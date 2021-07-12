@@ -71,7 +71,9 @@ func main() {
 	defer factory.Cancel()
 
 	logger.Info("Connecting to kubernetes API")
-	api, err := NewAPI(logger)
+	// TODO: Get namespace from config
+	namespace := ""
+	api, err := NewAPI(logger, namespace)
 	if err != nil {
 		panic(err)
 	}

@@ -32,7 +32,7 @@ type PodManager struct {
 	mutex sync.Mutex
 }
 
-// Proxy returns a httputil.ReverseProxy instance to current pod's IP.
+// Proxy returns a PodProxy instance to current pod's IP.
 // If create == true, the pod will be scheduled for creation if not existing.
 // Beware that the proxy might be nil if no IP, even when error == nil.
 func (m *PodManager) Proxy(ctx context.Context, api *KubeAPI, create bool) (*PodProxy, PodInfo, error) {
@@ -62,7 +62,7 @@ func (m *PodManager) Delete(ctx context.Context, api *KubeAPI) error {
 
 // updateStatus must be called with the lock held
 func (m *PodManager) updateStatus(ctx context.Context, api *KubeAPI, create bool) error {
-	// If we don't know the container status, ask for it
+	// If we don't know the pod status, ask for it
 	if m.latest.Phase == "" {
 		info, err := api.PodStatus(ctx, m.Descriptor.Name)
 		if err != nil {
@@ -87,6 +87,7 @@ func (m *PodManager) updateStatus(ctx context.Context, api *KubeAPI, create bool
 
 // Watch the pod status to keep updating the proxy when IP address changes.
 // If the watch is closed or the ctx or lifetime expire, it calls the cleanup func.
+// If it returns an error, it will NOT call the cleanup function.
 func (m *PodManager) Watch(ctx context.Context, api *KubeAPI, lifetime time.Duration, cleanup func()) error {
 	cancelCtx, cancelFunc := context.WithCancel(ctx)
 	watch, err := api.WatchPod(cancelCtx, m.Descriptor.Name)

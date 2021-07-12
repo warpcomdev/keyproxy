@@ -47,6 +47,7 @@ func (t *AtomicTimestamp) Remaining(lifetime time.Duration) time.Duration {
 	return time.Duration(timestamp+UnixTimestamp(lifetime/time.Second)-now) * time.Second
 }
 
+// TimeKeeper base struct for objects that need a cancellable ticker thread
 type TimeKeeper struct {
 	// Must be the first field in every embedding struct
 	timestamp  AtomicTimestamp
@@ -56,6 +57,7 @@ type TimeKeeper struct {
 	Group      sync.WaitGroup
 }
 
+// Tick starts updating timestamp each time.Duration interval
 func (t *TimeKeeper) Tick(step time.Duration) {
 	t.cancelCtx, t.cancelFunc = context.WithCancel(context.Background())
 	t.Group.Add(1)
@@ -65,10 +67,12 @@ func (t *TimeKeeper) Tick(step time.Duration) {
 	}()
 }
 
+// Clock returns the current timestamp value
 func (t *TimeKeeper) Clock() UnixTimestamp {
 	return t.timestamp.Load()
 }
 
+// Cancel the ticker and wait the group
 func (t *TimeKeeper) Cancel() {
 	var cancelFunc context.CancelFunc
 	t.Mutex.Lock()
