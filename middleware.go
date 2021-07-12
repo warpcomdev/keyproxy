@@ -6,6 +6,8 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type middleware struct {
@@ -46,11 +48,15 @@ func (m *middleware) Auth(check func(ctx context.Context, token string) (context
 		// Check cookie credentials
 		ctx, err := check(r.Context(), authCookie.Value)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			log.WithError(err).Error("Failed to check credentials")
+			ctx = nil // fallthrough to the next "if"
 		}
 		if ctx == nil {
-			http.Redirect(w, r, LOGINPATH, statusRedirect)
+			if r.URL.Path == "/" && r.Method == http.MethodGet {
+				http.Redirect(w, r, LOGINPATH, statusRedirect)
+			} else {
+				http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+			}
 			return
 		}
 		handler.ServeHTTP(w, r.WithContext(ctx))
