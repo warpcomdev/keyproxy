@@ -117,7 +117,7 @@ func (h *ProxyHandler) Check(ctx context.Context, token string) (context.Context
 
 // Handle login path
 func (h *ProxyHandler) login(w http.ResponseWriter, r *http.Request) {
-	h.Logger.Debug("Triggering LOGIN Path")
+	h.Logger.Debug("Triggering Login Path")
 	if r.Method == http.MethodPost {
 		h.Logger.Debug("Triggering login POST path")
 		h.LoginForm(w, r)
@@ -233,7 +233,7 @@ func (h *ProxyHandler) healthz(w http.ResponseWriter, r *http.Request) {
 func (h *ProxyHandler) errorPage(w http.ResponseWriter, r *http.Request) {
 	h.Logger.Debug("Triggering Error Page")
 	session := r.Context().Value(SessionKeyType(0)).(Session)
-	h.render(session.Logger, w, r, session.Manager, session.Credentials, ErrorTemplate, false, true)
+	h.render(session.Logger, w, r, session.Manager, session.Credentials, ErrorTemplate, false /*, true*/)
 }
 
 // killPage renders the kill page template
@@ -245,21 +245,21 @@ func (h *ProxyHandler) killPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.render(session.Logger, w, r, session.Manager, session.Credentials, KillTemplate, false, false)
+	h.render(session.Logger, w, r, session.Manager, session.Credentials, KillTemplate, false /*, false*/)
 }
 
 // spawnPage renders the spawn page template
 func (h *ProxyHandler) spawnPage(w http.ResponseWriter, r *http.Request) {
 	h.Logger.Debug("Triggering Spawn Page")
 	session := r.Context().Value(SessionKeyType(0)).(Session)
-	h.render(session.Logger, w, r, session.Manager, session.Credentials, SpawnTemplate, true, false)
+	h.render(session.Logger, w, r, session.Manager, session.Credentials, SpawnTemplate, true /*, false*/)
 }
 
 // waitPage renders the wait page template
 func (h *ProxyHandler) waitPage(w http.ResponseWriter, r *http.Request) {
 	h.Logger.Debug("Triggering Wait Page")
 	session := r.Context().Value(SessionKeyType(0)).(Session)
-	h.render(session.Logger, w, r, session.Manager, session.Credentials, WaitTemplate, false, true)
+	h.render(session.Logger, w, r, session.Manager, session.Credentials, WaitTemplate, false /*, true*/)
 }
 
 // forward to backend proxy by default
@@ -313,19 +313,19 @@ func NewParams(cred Credentials, info PodInfo) TemplateParams {
 }
 
 // Render a template
-func (h *ProxyHandler) render(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials, name string, create bool, redirect bool) {
+func (h *ProxyHandler) render(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials, name string, create bool /*, redirect bool*/) {
 	logger = logger.WithField("template", name)
-	proxy, info, err := mgr.Proxy(r.Context(), h.Api, create)
+	/*proxy*/ _, info, err := mgr.Proxy(r.Context(), h.Api, create)
 	if err != nil {
 		logger.WithError(err).Error("Failed to get current pod status")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	// If already available, redirect
-	if redirect && info.Type != Deleted && info.Phase == PodRunning && info.Address != "" && proxy != nil {
+	/*if redirect && info.Type != Deleted && info.Phase == PodRunning && info.Address != "" && proxy != nil {
 		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 		return
-	}
+	}*/
 	w.Header().Add(http.CanonicalHeaderKey("Content-Type"), "text/html; encoding=utf-8")
 	w.WriteHeader(http.StatusOK)
 	params := NewParams(cred, info)
