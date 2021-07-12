@@ -178,7 +178,7 @@ func (m *AuthManager) Login(cred Credentials, password string) (*AuthSession, er
 		m.cache[cred] = session
 		m.Group.Add(1)
 		go func() {
-			m.Group.Done()
+			defer m.Group.Done()
 			m.Watch(m.cancelCtx, cred, session)
 		}()
 	}
