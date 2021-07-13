@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -21,7 +22,7 @@ func Middleware(handlerFunc func(w http.ResponseWriter, r *http.Request)) *middl
 }
 
 // Auth checks authentication and stores session in context.
-func (m *middleware) Auth(check func(ctx context.Context, token string) (context.Context, error), redirect bool) *middleware {
+func (m *middleware) Auth(cookieName string, check func(ctx context.Context, token string) (context.Context, error), redirect bool) *middleware {
 	handler := m.Handler
 	m.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
@@ -32,18 +33,12 @@ func (m *middleware) Auth(check func(ctx context.Context, token string) (context
 		}
 
 		// Check if cookie exists
-		var authCookie *http.Cookie
-		cookies := r.Cookies()
-		for _, cookie := range cookies {
-			if cookie.Name == SESSIONCOOKIE {
-				authCookie = cookie
-				break
-			}
-		}
-
+		authCookie, err := r.Cookie(cookieName)
 		var ctx context.Context
-		var err error
-		if authCookie != nil {
+		if err != nil && !errors.Is(err, http.ErrNoCookie) {
+			log.WithError(err).Error("Failed to get auth cookie")
+		}
+		if err == nil && authCookie != nil {
 			// Check cookie credentials
 			ctx, err = check(r.Context(), authCookie.Value)
 			if err != nil {
@@ -51,6 +46,8 @@ func (m *middleware) Auth(check func(ctx context.Context, token string) (context
 				ctx = nil // fallthrough to the next "if"
 			}
 		}
+
+		// Check if we could retrieve the context
 		if ctx == nil {
 			if redirect || (r.URL.Path == "/" && r.Method == http.MethodGet) {
 				http.Redirect(w, r, LOGINPATH, statusRedirect)

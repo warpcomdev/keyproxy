@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	htmlTemplate "html/template"
 	"io/fs"
 	"net/http"
@@ -90,13 +91,13 @@ func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, 
 	rand.Read(handler.csrfSecret)
 	handler.Handle(RESOURCEPATH, http.StripPrefix(RESOURCEPATH, http.FileServer(http.FS(resources))))
 	handler.Handle(LOGINPATH, Middleware(handler.login).Methods(http.MethodGet, http.MethodPost).Exhaust())
-	handler.Handle(LOGOUTPATH, Middleware(handler.logout).Auth(handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(LOGOUTPATH, Middleware(handler.logout).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
 	handler.Handle(HEALTHZPATH, Middleware(handler.healthz).Methods(http.MethodGet).Exhaust())
-	handler.Handle(ERRORPATH, Middleware(handler.errorPage).Auth(handler.Check, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle(KILLPATH, Middleware(handler.killPage).Auth(handler.Check, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle(SPAWNPATH, Middleware(handler.spawnPage).Auth(handler.Check, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle(WAITPATH, Middleware(handler.waitPage).Auth(handler.Check, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle("/", Middleware(handler.forward).Auth(handler.Check, false)) // do not exhaust, in case it upgrades to websocket
+	handler.Handle(ERRORPATH, Middleware(handler.errorPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(KILLPATH, Middleware(handler.killPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(SPAWNPATH, Middleware(handler.spawnPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(WAITPATH, Middleware(handler.waitPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle("/", Middleware(handler.forward).Auth(SESSIONCOOKIE, handler.Check, false)) // do not exhaust, in case it upgrades to websocket
 	handler.Tick(time.Second)
 	return handler, nil
 }
@@ -197,12 +198,10 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 	}
 	loggerCtx := h.Logger.WithFields(log.Fields{"service": cred.Service, "username": cred.Username})
 
-	var csrfCookie *http.Cookie
-	for _, cookie := range r.Cookies() {
-		if cookie.Name == CSRFCOOKIE {
-			csrfCookie = cookie
-			break
-		}
+	csrfCookie, err := r.Cookie(CSRFCOOKIE)
+	if err != nil && errors.Is(err, http.ErrNoCookie) {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		csrfCookie = nil
 	}
 	if csrfCookie == nil {
 		h.loginPage(w, r, cred, "Error while matching request")
@@ -251,6 +250,7 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Save JWT token as Cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     SESSIONCOOKIE,
 		Value:    token,
