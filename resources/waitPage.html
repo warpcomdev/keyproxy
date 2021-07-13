@@ -7,13 +7,13 @@
 <body>
     <div id="frame">
         <div id="status">
-            <p>Your pod is still getting ready. It might take a few minutes to become available.</p>
+            <p>Your pod is in service. If you just spawned it, it might take a few minutes to become available.</p>
         </div>
         {{ template "tables.html" . }}
         <div id="links">
             <p>Note: This page does not autorefresh.</p>
             <ul>
-                <li>To check the current status of your pod, please click <a href="/">here</a></li>
+                <li>To check the current status of your pod, please click <a href="/podapi/info">here</a></li>
                 <li>When the pod becomes RUNNING with an IP, please click <a href="/">here</a></li>
             </ul>
         </div>

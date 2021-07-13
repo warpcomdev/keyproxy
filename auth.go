@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"sync"
 	"time"
@@ -98,6 +99,7 @@ type AuthManager struct {
 	TimeKeeper
 	Logger   *log.Logger
 	Lifetime time.Duration
+	Keystone Keystone
 	// For token signing
 	SigningMethod jwt.SigningMethod
 	KeyFunc       jwt.Keyfunc
@@ -107,10 +109,11 @@ type AuthManager struct {
 }
 
 // NewAuth creates new Auth Manager
-func NewAuth(logger *log.Logger, lifetime time.Duration, signingMethod jwt.SigningMethod, keyFunc jwt.Keyfunc) *AuthManager {
+func NewAuth(logger *log.Logger, lifetime time.Duration, keystoneURL string, signingMethod jwt.SigningMethod, keyFunc jwt.Keyfunc) *AuthManager {
 	manager := &AuthManager{
 		Logger:        logger,
 		Lifetime:      lifetime,
+		Keystone:      Keystone{URL: fmt.Sprintf("%s/v3/auth/tokens", keystoneURL)},
 		SigningMethod: signingMethod,
 		KeyFunc:       keyFunc,
 		cache:         make(map[Credentials]*AuthSession),
@@ -159,7 +162,8 @@ func (m *AuthManager) Login(cred Credentials, password string) (*AuthSession, er
 	m.Mutex.Unlock()
 
 	// Fill session data. This is a race, since I release the lock.
-	token, exp, err := m.restLogin(cred, password)
+	logger := m.Logger.WithField("credentials", cred)
+	token, exp, err := m.Keystone.restLogin(logger, cred, password)
 	if err != nil || token == "" {
 		return nil, err
 	}
@@ -204,7 +208,7 @@ func (m *AuthManager) Watch(ctx context.Context, cred Credentials, session *Auth
 		delete(m.cache, cred)
 		m.Mutex.Unlock()
 	}()
-	loggerCtx := m.Logger.WithField("cred", cred)
+	logger := m.Logger.WithField("cred", cred)
 	timer := time.NewTimer(m.Lifetime + time.Second)
 	// Don't defer timer.stop(), because defer is evaluated in this
 	// point, but timer can be changed later on.
@@ -216,7 +220,7 @@ func (m *AuthManager) Watch(ctx context.Context, cred Credentials, session *Auth
 		remaining := session.expiration.Sub(time.Now())
 		switch {
 		case remaining <= 0:
-			loggerCtx.Info("Session expired without renewal")
+			logger.Info("Session expired without renewal")
 			timer.Stop()
 			return
 		case remaining > 240*time.Second:
@@ -233,39 +237,29 @@ func (m *AuthManager) Watch(ctx context.Context, cred Credentials, session *Auth
 		case <-timer.C:
 			remaining := session.accessTime.Remaining(m.Lifetime)
 			if remaining <= 0 {
-				loggerCtx.Info("Session thread expired")
+				logger.Info("Session thread expired")
 				refresh.Stop()
 				return
 			}
 			timer = time.NewTimer(remaining + time.Second)
 		// Token refresh
 		case <-refresh.C:
-			token, exp, err := m.restRefresh(cred, session.token)
+			token, exp, err := m.Keystone.restRefresh(logger, cred, session.token)
 			if err == nil {
 				if token != "" {
 					session.updateJWT(cred, token, exp, m.SigningMethod, m.KeyFunc)
 				} else {
-					loggerCtx.Info("Failed to refresh token")
+					logger.Info("Failed to refresh token")
 				}
 			} else {
-				loggerCtx.WithError(err).Error("Failed to refresh token")
+				logger.WithError(err).Error("Failed to refresh token")
 			}
 		// Cancellation
 		case <-ctx.Done():
-			loggerCtx.Info("Session thread context cancelled")
+			logger.Info("Session thread context cancelled")
 			timer.Stop()
 			refresh.Stop()
 			return
 		}
 	}
-}
-
-// login must be called with the mutex NOT held
-func (m *AuthManager) restLogin(cred Credentials, pass string) (string, time.Time, error) {
-	return "fakeToken", time.Now().Add(time.Hour), nil
-}
-
-// login must be called with the mutex NOT held
-func (m *AuthManager) restRefresh(cred Credentials, pass string) (string, time.Time, error) {
-	return "fakeToken", time.Now().Add(time.Hour), nil
 }

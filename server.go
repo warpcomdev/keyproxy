@@ -24,10 +24,9 @@ const (
 	LOGINPATH    = "/podapi/login"
 	LOGOUTPATH   = "/podapi/logout"
 	HEALTHZPATH  = "/healthz"
-	ERRORPATH    = "/podapi/error"
 	KILLPATH     = "/podapi/kill"
 	SPAWNPATH    = "/podapi/spawn"
-	WAITPATH     = "/podapi/wait"
+	INFOPATH     = "/podapi/info"
 )
 
 // Templates for each feedback page
@@ -93,10 +92,9 @@ func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, 
 	handler.Handle(LOGINPATH, Middleware(handler.login).Methods(http.MethodGet, http.MethodPost).Exhaust())
 	handler.Handle(LOGOUTPATH, Middleware(handler.logout).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
 	handler.Handle(HEALTHZPATH, Middleware(handler.healthz).Methods(http.MethodGet).Exhaust())
-	handler.Handle(ERRORPATH, Middleware(handler.errorPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(INFOPATH, Middleware(handler.infoPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
 	handler.Handle(KILLPATH, Middleware(handler.killPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
 	handler.Handle(SPAWNPATH, Middleware(handler.spawnPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle(WAITPATH, Middleware(handler.waitPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
 	handler.Handle("/", Middleware(handler.forward).Auth(SESSIONCOOKIE, handler.Check, false)) // do not exhaust, in case it upgrades to websocket
 	handler.Tick(time.Second)
 	return handler, nil
@@ -112,30 +110,30 @@ func (h *ProxyHandler) Check(ctx context.Context, token string) (context.Context
 	if authSession == nil {
 		return nil, err
 	}
-	contextLog := h.Logger.WithField("cred", cred)
-	manager, err := h.Factory.Find(h.Api, cred)
+	logger := h.Logger.WithField("cred", cred)
+	mgr, err := h.Factory.Find(h.Api, cred)
 	if err != nil {
-		contextLog.WithError(err).Error("Failed to create pod manager")
+		logger.WithError(err).Error("Failed to create pod manager")
 		return nil, err
 	}
 	session := Session{
 		Credentials: cred,
 		AuthSession: authSession,
-		Manager:     manager,
-		Logger:      contextLog,
+		Manager:     mgr,
+		Logger:      logger,
 	}
 	return context.WithValue(ctx, SessionKeyType(0), session), nil
 }
 
 // Handle login path
 func (h *ProxyHandler) login(w http.ResponseWriter, r *http.Request) {
-	ctxLogger := h.Logger.WithFields(log.Fields{"method": r.Method, "path": r.URL.Path})
+	logger := h.Logger.WithFields(log.Fields{"method": r.Method, "path": r.URL.Path})
 	if r.Method == http.MethodPost {
-		ctxLogger.Debug("Triggering login POST path")
+		logger.Debug("Triggering login POST path")
 		h.LoginForm(w, r)
 		return
 	}
-	ctxLogger.Debug("Triggering login GET path")
+	logger.Debug("Triggering login GET path")
 	h.loginPage(w, r, Credentials{}, "")
 }
 
@@ -196,7 +194,7 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 		h.loginPage(w, r, cred, "Empty service name, user, password or token")
 		return
 	}
-	loggerCtx := h.Logger.WithFields(log.Fields{"service": cred.Service, "username": cred.Username})
+	logger := h.Logger.WithFields(log.Fields{"service": cred.Service, "username": cred.Username})
 
 	csrfCookie, err := r.Cookie(CSRFCOOKIE)
 	if err != nil && errors.Is(err, http.ErrNoCookie) {
@@ -227,12 +225,12 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 	// Get session and check parameters
 	session, err := h.Auth.Login(cred, pass)
 	if err != nil {
-		loggerCtx.WithError(err).Error("Failed to login")
+		logger.WithError(err).Error("Failed to login")
 		h.loginPage(w, r, cred, err.Error())
 		return
 	}
 	if session == nil {
-		loggerCtx.Info("Wrong credentials")
+		logger.Info("Wrong credentials")
 		h.loginPage(w, r, cred, "Wrong credentials")
 		return
 	}
@@ -240,12 +238,12 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 	// Get the jwt token from the session
 	token, exp, err := session.JWT()
 	if err != nil {
-		loggerCtx.WithError(err).Error("Failed to retrieve JWT token")
+		logger.WithError(err).Error("Failed to retrieve JWT token")
 		h.loginPage(w, r, cred, err.Error())
 		return
 	}
 	if token == "" {
-		loggerCtx.Error("Empty token")
+		logger.Error("Empty token")
 		h.loginPage(w, r, cred, "Internal error (empty token)")
 		return
 	}
@@ -295,10 +293,20 @@ func (h *ProxyHandler) healthz(w http.ResponseWriter, r *http.Request) {
 }
 
 // errorPage renders the error page template
-func (h *ProxyHandler) errorPage(w http.ResponseWriter, r *http.Request) {
-	h.Logger.Debug("Triggering Error Page")
+func (h *ProxyHandler) infoPage(w http.ResponseWriter, r *http.Request) {
+	h.Logger.Debug("Triggering Info Page")
 	session := r.Context().Value(SessionKeyType(0)).(Session)
-	h.render(session.Logger, w, r, session.Manager, session.Credentials, ErrorTemplate, false /*, true*/)
+	params, err := h.NewParams(r.Context(), session, false)
+	if err != nil {
+		session.Logger.WithError(err).Error("Failed to get current pod info")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	template := WaitTemplate
+	if params.EventType == Deleted || params.PodPhase == PodFailed || params.PodPhase == PodSucceeded || params.PodPhase == PodUnknown {
+		template = ErrorTemplate
+	}
+	h.render(session.Logger, w, r, template, params)
 }
 
 // killPage renders the kill page template
@@ -310,28 +318,33 @@ func (h *ProxyHandler) killPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.render(session.Logger, w, r, session.Manager, session.Credentials, KillTemplate, false /*, false*/)
+	params, err := h.NewParams(r.Context(), session, false)
+	if err != nil {
+		session.Logger.WithError(err).Error("Failed to create params after killing pod")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h.render(session.Logger, w, r, KillTemplate, params)
 }
 
 // spawnPage renders the spawn page template
 func (h *ProxyHandler) spawnPage(w http.ResponseWriter, r *http.Request) {
 	h.Logger.Debug("Triggering Spawn Page")
 	session := r.Context().Value(SessionKeyType(0)).(Session)
-	h.render(session.Logger, w, r, session.Manager, session.Credentials, SpawnTemplate, true /*, false*/)
-}
-
-// waitPage renders the wait page template
-func (h *ProxyHandler) waitPage(w http.ResponseWriter, r *http.Request) {
-	h.Logger.Debug("Triggering Wait Page")
-	session := r.Context().Value(SessionKeyType(0)).(Session)
-	h.render(session.Logger, w, r, session.Manager, session.Credentials, WaitTemplate, false /*, true*/)
+	params, err := h.NewParams(r.Context(), session, true)
+	if err != nil {
+		session.Logger.WithError(err).Error("Failed to spawn pod")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h.render(session.Logger, w, r, SpawnTemplate, params)
 }
 
 // forward to backend proxy by default
 func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request) {
 	h.Logger.WithField("path", r.URL.Path).Debug("Triggering Proxy")
 	session := r.Context().Value(SessionKeyType(0)).(Session)
-	proxy, info, err := session.Manager.Proxy(r.Context(), h.Api, false)
+	proxy, _, err := session.Manager.Proxy(r.Context(), h.Api, false)
 	if err != nil {
 		session.Logger.WithError(err).Error("Failed to get pod status")
 		http.Error(w, "Failed to get pod status", http.StatusInternalServerError)
@@ -345,11 +358,7 @@ func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request) {
 			Exhaust(r)
 			return
 		}
-		redirectPath := WAITPATH
-		if info.Type == Deleted || info.Phase == PodFailed || info.Phase == PodSucceeded || info.Phase == PodUnknown {
-			redirectPath = ERRORPATH
-		}
-		http.Redirect(w, r, redirectPath, http.StatusTemporaryRedirect)
+		http.Redirect(w, r, INFOPATH, http.StatusTemporaryRedirect)
 		Exhaust(r)
 		return
 	}
@@ -362,38 +371,31 @@ func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request) {
 type TemplateParams struct {
 	Service   string
 	Username  string
-	EventType string
-	PodPhase  string
+	EventType EventType
+	PodPhase  PodPhase
 	Address   string
 }
 
-func NewParams(cred Credentials, info PodInfo) TemplateParams {
-	return TemplateParams{
-		Service:   cred.Service,
-		Username:  cred.Username,
-		EventType: string(info.Type),
-		PodPhase:  string(info.Phase),
+func (h *ProxyHandler) NewParams(ctx context.Context, session Session, create bool) (TemplateParams, error) {
+	_, info, err := session.Manager.Proxy(ctx, h.Api, create)
+	if err != nil {
+		return TemplateParams{}, err
+	}
+	params := TemplateParams{
+		Service:   session.Credentials.Service,
+		Username:  session.Credentials.Username,
+		EventType: info.Type,
+		PodPhase:  info.Phase,
 		Address:   info.Address,
 	}
+	return params, nil
 }
 
 // Render a template
-func (h *ProxyHandler) render(logger *log.Entry, w http.ResponseWriter, r *http.Request, mgr *PodManager, cred Credentials, name string, create bool /*, redirect bool*/) {
+func (h *ProxyHandler) render(logger *log.Entry, w http.ResponseWriter, r *http.Request, name string, params TemplateParams) {
 	logger = logger.WithField("template", name)
-	/*proxy*/ _, info, err := mgr.Proxy(r.Context(), h.Api, create)
-	if err != nil {
-		logger.WithError(err).Error("Failed to get current pod status")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	// If already available, redirect
-	/*if redirect && info.Type != Deleted && info.Phase == PodRunning && info.Address != "" && proxy != nil {
-		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
-		return
-	}*/
 	w.Header().Add(http.CanonicalHeaderKey("Content-Type"), "text/html; encoding=utf-8")
 	w.WriteHeader(http.StatusOK)
-	params := NewParams(cred, info)
 	if err := h.templateGroup.ExecuteTemplate(w, name, params); err != nil {
 		logger.WithField("params", params).WithError(err).Error("Failed to render template")
 	}

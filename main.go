@@ -79,10 +79,12 @@ func main() {
 	}
 
 	logger.Info("Building auth manager")
+	// TODO: Read from environment
+	keystoneURL := "https://auth.iotplatform.telefonica.com:15001"
 	// Use random signing key. Beware if we ever deploy more than one pod.
 	signingKey := make([]byte, 64)
 	rand.Read(signingKey)
-	auth := NewAuth(logger, SESSION_LIFETIME, jwt.SigningMethodHS256, jwt.Keyfunc(func(*jwt.Token) (interface{}, error) { return signingKey, nil }))
+	auth := NewAuth(logger, SESSION_LIFETIME, keystoneURL, jwt.SigningMethodHS256, jwt.Keyfunc(func(*jwt.Token) (interface{}, error) { return signingKey, nil }))
 	defer auth.Cancel()
 
 	// TODO: Get resourceDir from environment variable
