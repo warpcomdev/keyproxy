@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	htmlTemplate "html/template"
 	"io/fs"
 	"net/http"
@@ -36,6 +41,9 @@ const (
 // Session Cookie name
 const SESSIONCOOKIE = "KEYPROXY_SESSION"
 
+// CSRF Cookie name
+const CSRFCOOKIE = "KEYPROXY_CSRF"
+
 // AuthSessionKeyType used for storing session in request context.
 type SessionKeyType int
 type Session struct {
@@ -56,6 +64,7 @@ type ProxyHandler struct {
 	Api           *KubeAPI
 	Auth          *AuthManager
 	Factory       *PodFactory
+	csrfSecret    []byte
 	templateGroup *htmlTemplate.Template
 	*http.ServeMux
 }
@@ -75,17 +84,19 @@ func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, 
 		Auth:          auth,
 		Factory:       factory,
 		templateGroup: templateGroup,
+		csrfSecret:    make([]byte, 64),
 		ServeMux:      http.NewServeMux(),
 	}
+	rand.Read(handler.csrfSecret)
 	handler.Handle(RESOURCEPATH, http.StripPrefix(RESOURCEPATH, http.FileServer(http.FS(resources))))
 	handler.Handle(LOGINPATH, Middleware(handler.login).Methods(http.MethodGet, http.MethodPost).Exhaust())
-	handler.Handle(LOGOUTPATH, Middleware(handler.logout).Auth(handler.Check).Methods(http.MethodGet).Exhaust())
+	handler.Handle(LOGOUTPATH, Middleware(handler.logout).Auth(handler.Check, true).Methods(http.MethodGet).Exhaust())
 	handler.Handle(HEALTHZPATH, Middleware(handler.healthz).Methods(http.MethodGet).Exhaust())
-	handler.Handle(ERRORPATH, Middleware(handler.errorPage).Auth(handler.Check).Methods(http.MethodGet).Exhaust())
-	handler.Handle(KILLPATH, Middleware(handler.killPage).Auth(handler.Check).Methods(http.MethodGet).Exhaust())
-	handler.Handle(SPAWNPATH, Middleware(handler.spawnPage).Auth(handler.Check).Methods(http.MethodGet).Exhaust())
-	handler.Handle(WAITPATH, Middleware(handler.waitPage).Auth(handler.Check).Methods(http.MethodGet).Exhaust())
-	handler.Handle("/", Middleware(handler.forward).Auth(handler.Check)) // do not exhaust, in case it upgrades to websocket
+	handler.Handle(ERRORPATH, Middleware(handler.errorPage).Auth(handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(KILLPATH, Middleware(handler.killPage).Auth(handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(SPAWNPATH, Middleware(handler.spawnPage).Auth(handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(WAITPATH, Middleware(handler.waitPage).Auth(handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle("/", Middleware(handler.forward).Auth(handler.Check, false)) // do not exhaust, in case it upgrades to websocket
 	handler.Tick(time.Second)
 	return handler, nil
 }
@@ -117,24 +128,49 @@ func (h *ProxyHandler) Check(ctx context.Context, token string) (context.Context
 
 // Handle login path
 func (h *ProxyHandler) login(w http.ResponseWriter, r *http.Request) {
-	h.Logger.Debug("Triggering Login Path")
+	ctxLogger := h.Logger.WithFields(log.Fields{"method": r.Method, "path": r.URL.Path})
 	if r.Method == http.MethodPost {
-		h.Logger.Debug("Triggering login POST path")
+		ctxLogger.Debug("Triggering login POST path")
 		h.LoginForm(w, r)
 		return
 	}
-	h.Logger.Debug("Triggering login GET path")
-	h.loginPage(w, r, "")
+	ctxLogger.Debug("Triggering login GET path")
+	h.loginPage(w, r, Credentials{}, "")
 }
 
 // Parameters passed to login page template
 type LoginParams struct {
-	Message string
+	Service   string
+	Username  string
+	Message   string
+	CSRFToken string
 }
 
 // loginPage renders the login page template
-func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, msg string) {
-	if err := h.templateGroup.ExecuteTemplate(w, LoginTemplate, LoginParams{Message: msg}); err != nil {
+func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred Credentials, msg string) {
+	// Create CSRF token
+	buffer := make([]byte, 64)
+	rand.Read(buffer)
+	csrfToken := base64.StdEncoding.EncodeToString(buffer)
+	// Sign CSRF token
+	mac := hmac.New(sha256.New, h.csrfSecret)
+	mac.Write(buffer)
+	cookieToken := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	// Save signature as cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     CSRFCOOKIE,
+		Value:    cookieToken,
+		Expires:  time.Now().Add(15 * time.Minute),
+		Path:     "/",
+		HttpOnly: true,
+	})
+	params := LoginParams{
+		Service:   cred.Service,
+		Username:  cred.Username,
+		Message:   msg,
+		CSRFToken: csrfToken,
+	}
+	if err := h.templateGroup.ExecuteTemplate(w, LoginTemplate, params); err != nil {
 		h.Logger.WithError(err).Error("Failed to render login template")
 	}
 }
@@ -152,24 +188,53 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 		Username: strings.TrimSpace(r.Form.Get("username")),
 	}
 	pass := strings.TrimSpace(r.Form.Get("password"))
+	token := strings.TrimSpace(r.Form.Get("csrftoken"))
 
 	// Check if parameters are empty
-	if cred.Service == "" || cred.Username == "" || pass == "" {
-		h.loginPage(w, r, "Empty service name, user or password")
+	if cred.Service == "" || cred.Username == "" || pass == "" || token == "" {
+		h.loginPage(w, r, cred, "Empty service name, user, password or token")
 		return
 	}
 	loggerCtx := h.Logger.WithFields(log.Fields{"service": cred.Service, "username": cred.Username})
+
+	var csrfCookie *http.Cookie
+	for _, cookie := range r.Cookies() {
+		if cookie.Name == CSRFCOOKIE {
+			csrfCookie = cookie
+			break
+		}
+	}
+	if csrfCookie == nil {
+		h.loginPage(w, r, cred, "Error while matching request")
+		return
+	}
+
+	buffer, err := base64.StdEncoding.DecodeString(token)
+	if err != nil {
+		h.loginPage(w, r, cred, err.Error())
+		return
+	}
+	signature, err := base64.StdEncoding.DecodeString(csrfCookie.Value)
+	if err != nil {
+		h.loginPage(w, r, cred, err.Error())
+		return
+	}
+	mac := hmac.New(sha256.New, h.csrfSecret)
+	mac.Write(buffer)
+	if bytes.Compare(signature, mac.Sum(nil)) != 0 {
+		h.loginPage(w, r, cred, "Error while matching tokens")
+	}
 
 	// Get session and check parameters
 	session, err := h.Auth.Login(cred, pass)
 	if err != nil {
 		loggerCtx.WithError(err).Error("Failed to login")
-		h.loginPage(w, r, err.Error())
+		h.loginPage(w, r, cred, err.Error())
 		return
 	}
 	if session == nil {
 		loggerCtx.Info("Wrong credentials")
-		h.loginPage(w, r, "Wrong credentials")
+		h.loginPage(w, r, cred, "Wrong credentials")
 		return
 	}
 
@@ -177,12 +242,12 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 	token, exp, err := session.JWT()
 	if err != nil {
 		loggerCtx.WithError(err).Error("Failed to retrieve JWT token")
-		h.loginPage(w, r, err.Error())
+		h.loginPage(w, r, cred, err.Error())
 		return
 	}
 	if token == "" {
 		loggerCtx.Error("Empty token")
-		h.loginPage(w, r, "Internal error (empty token)")
+		h.loginPage(w, r, cred, "Internal error (empty token)")
 		return
 	}
 

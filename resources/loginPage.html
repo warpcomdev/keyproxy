@@ -9,11 +9,12 @@
         <div id="login">
             <form method="POST" action="/podapi/login">
                 <table>
-                    <tr><th>Username:</th><td><input type="text" name="username" id="username"/></td></tr>
-                    <tr><th>Password:</th><td><input type="password" name="password" id="username"/></td></tr>
-                    <tr><th>Service:</th><td><input type="text" name="service" id="service"/></td></tr>
+                    <tr><th>Username:</th><td><input type="text" name="username" id="username" value="{{ .Username }}"/></td></tr>
+                    <tr><th>Password:</th><td><input type="password" name="password" id="password"/></td></tr>
+                    <tr><th>Service:</th><td><input type="text" name="service" id="service" value="{{ .Service }}"/></td></tr>
                     <tr><td colspan="2"><input type="submit" name="submit" id="submit" value="Submit"/></td></tr>
                 </table>
+                <input type="hidden" name="csrftoken" id="csrftoken" value="{{ .CSRFToken }}"/>
             </form>
         </div>
         {{ with .Message }}
