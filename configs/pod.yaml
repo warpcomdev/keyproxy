@@ -2,19 +2,19 @@ apiVersion: v1
 kind: Pod
 metadata:
   labels:
-    app: echo-server
-    service: {{ .Service }}
-    username: {{ .Username }}
-  name: test-{{ .Service | replace "_" "-" }}-{{ .Username | replace "_" "-" }}
-  namespace: smc-os2-dev
+    app: wsos2-tooling
+    service: {{ .Service | quote }}
+    username: {{ .Username | quote }}
+  name: "wso2tooling-{{ .Service | replace "_" "-" }}-{{ .Username | replace "_" "-" }}"
+  namespace: {{ .Namespace | quote }}
 spec:
   containers:
-  - image: jmalloc/echo-server:0.2.0
+  - image: warpcomdev/wso2si-integrator:1.1.0
     imagePullPolicy: IfNotPresent
-    name: echo
+    name: wso2tooling
     ports:
     - name: http
-      containerPort: 8080
+      containerPort: 9390
     resources:
       limits:
         cpu: 350m
@@ -22,5 +22,13 @@ spec:
       requests:
         cpu: 52m
         memory: 192Mi
+    volumeMounts:
+    - mountPath: /opt/wso2si
+      name: data
+      subPath: {{ .Username | quote }}
   imagePullSecrets:
   - name: fiware-platform-docker-account
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: "{{ .Namespace | splitList "-" | last }}-sftp-{{ .Service }}"

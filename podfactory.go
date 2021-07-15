@@ -59,10 +59,22 @@ func (f *PodFactory) Find(api *KubeAPI, creds Credentials) (*PodManager, error) 
 	return mgr, nil
 }
 
+// PodParameters are the parameters
+type PodParameters struct {
+	Username  string
+	Service   string
+	Namespace string
+}
+
 // newManager creates a manager and starts the pod watch
 func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, error) {
 	buffer := &bytes.Buffer{}
-	if err := f.Template.Execute(buffer, creds); err != nil {
+	params := PodParameters{
+		Username:  creds.Username,
+		Service:   creds.Service,
+		Namespace: api.Namespace,
+	}
+	if err := f.Template.Execute(buffer, params); err != nil {
 		return nil, err
 	}
 	pod, err := api.Decode(buffer.String())
