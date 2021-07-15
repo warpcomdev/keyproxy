@@ -16,6 +16,9 @@ import (
 
 	"github.com/masterminds/sprig"
 	log "github.com/sirupsen/logrus"
+
+	// Bring profiling interface in
+	_ "net/http/pprof"
 )
 
 // Paths that trigger server routines
@@ -96,6 +99,8 @@ func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, 
 	handler.Handle(KILLPATH, Middleware(handler.killPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
 	handler.Handle(SPAWNPATH, Middleware(handler.spawnPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
 	handler.Handle("/", Middleware(handler.forward).Auth(SESSIONCOOKIE, handler.Check, false)) // do not exhaust, in case it upgrades to websocket
+	// Add support for pprof
+	handler.Handle("/debug/pprof", http.DefaultServeMux)
 	handler.Tick(time.Second)
 	return handler, nil
 }
