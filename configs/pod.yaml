@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Pod
 metadata:
   labels:
-    app: wsos2-tooling
+    app: wsosi-tooling
     service: {{ .Service | quote }}
     username: {{ .Username | quote }}
   name: "wso2tooling-{{ .Service | replace "_" "-" }}-{{ .Username | replace "_" "-" }}"
