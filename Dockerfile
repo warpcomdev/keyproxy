@@ -7,5 +7,8 @@ COPY resources /app/resources
 RUN  CGO_ENABLED=0 go build
 
 FROM busybox:1.33
-COPY --from=builder /app/keyproxy /keyproxy
-ENTRYPOINT ["/keyproxy"]
+WORKDIR /app
+COPY --from=builder /app/keyproxy /app/keyproxy
+COPY configs /app/configs
+COPY resources /app/resources
+ENTRYPOINT ["/app/keyproxy"]
