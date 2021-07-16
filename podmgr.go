@@ -197,7 +197,12 @@ func (m *PodManager) reverseProxy(address string) *PodProxy {
 		// - /editor/js/service-console-list-manager.js
 		rh := response.Header.Get("Content-Type")
 		if m.ForwardedProto == "https" && strings.EqualFold(rh, "application/javascript") {
-			response.Body = replaceBody{body: response.Body}
+			logger := m.Logger.WithFields(log.Fields{"url": response.Request.URL.String()})
+			logger.Debug("Triggering body text replacement")
+			response.Body = replaceBody{
+				Logger: logger,
+				body:   response.Body,
+			}
 			// Make sure it's both a readCloser and a flusher
 			_ = response.Body.(io.ReadCloser)
 			_ = response.Body.(http.Flusher)
@@ -207,7 +212,6 @@ func (m *PodManager) reverseProxy(address string) *PodProxy {
 	if m.ForwardedProto != "" {
 		director := tp.Director
 		tp.Director = func(r *http.Request) {
-			m.Logger.WithField("headers", r.Header).Debug("Forwarding headers")
 			director(r)
 			r.Header.Set("X-Forwarded-Proto", m.ForwardedProto)
 		}
@@ -217,7 +221,8 @@ func (m *PodManager) reverseProxy(address string) *PodProxy {
 
 // ReplaceBody is a hack to make wso2 js work.
 type replaceBody struct {
-	body io.ReadCloser
+	Logger *log.Entry
+	body   io.ReadCloser
 }
 
 // Read implements io.Reader
@@ -229,9 +234,11 @@ func (rb replaceBody) Read(buf []byte) (int, error) {
 	right := []byte("\"wss://\"+")
 	n, err := rb.body.Read(buf)
 	if n > 0 {
+		rb.Logger.WithField("read", n).Debug("Reading body")
 		buf = buf[:n]
 		ind := bytes.Index(buf, wrong)
 		for ind >= 0 {
+			rb.Logger.Debug("performing replacement")
 			buf = buf[ind:]
 			copy(buf, right)
 			ind = bytes.Index(buf, wrong)
@@ -241,12 +248,14 @@ func (rb replaceBody) Read(buf []byte) (int, error) {
 }
 
 func (rb replaceBody) Close() error {
+	rb.Logger.Debug("Closing body")
 	return rb.body.Close()
 }
 
 // Flush implements io.Flusher
 func (rb replaceBody) Flush() {
 	if f, ok := rb.body.(http.Flusher); ok {
+		rb.Logger.Debug("Flushing body")
 		f.Flush()
 	}
 }
