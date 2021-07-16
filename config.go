@@ -10,7 +10,10 @@ import (
 const (
 	KEYSTONE                 = "https://auth.iotplatform.telefonica.com:15001"
 	PODCONFIG                = "configs/pod.yaml"
+	PODPORT                  = 9390
 	REALM                    = "KeyProxy Auth"
+	REDIRECT                 = "/editor"
+	FORWARDEDPROTO           = ""
 	POD_LIFETIME_MINUTE      = 120
 	SESSION_LIFETIME_MINUTE  = 60
 	GRACEFUL_SHUTDOWN_SECOND = 30
@@ -20,8 +23,11 @@ type Config struct {
 	KeystoneURL      string
 	PodConfig        string
 	Realm            string
+	Redirect         string
 	ResourceFolder   string
+	ForwardedProto   string
 	Port             int
+	PodPort          int
 	Namespace        string
 	SigningKey       string
 	PodLifetime      int
@@ -37,14 +43,23 @@ func GetConfig() *Config {
 	flag.StringVar(&config.ResourceFolder, "resources", LookupEnvOrString("KEYPROXY_RESOURCES", "resources"), "Path to static assets folder")
 	flag.StringVar(&config.Namespace, "namespace", LookupEnvOrString("KEYPROXY_NAMESPACE", ""), "Kubernetes namespace")
 	flag.StringVar(&config.SigningKey, "signingkey", LookupEnvOrString("KEYPROXY_SIGNINGKEY", ""), "Signing key for cookies")
+	flag.StringVar(&config.Redirect, "redirect", LookupEnvOrString("KEYPROXY_REDIRECT", REDIRECT), "Redirect requests for '/' to this path")
+	flag.StringVar(&config.Redirect, "fowardedproto", LookupEnvOrString("KEYPROXY_FORWARDEDPROTO", FORWARDEDPROTO), "Value for X-Forwarded-Proto header")
 	flag.IntVar(&config.Port, "port", LookupEnvOrInt("KEYPROXY_PORT", 8080), "TCP listen port")
+	flag.IntVar(&config.PodPort, "podport", LookupEnvOrInt("KEYPROXY_PODPORT", PODPORT), "Port the backend pod listens to")
 	flag.IntVar(&config.PodLifetime, "podlifetime", LookupEnvOrInt("KEYPROXY_PODLIFETIME", 120), "Pod Lifetime (minutes)")
 	flag.IntVar(&config.SessionLifetime, "sessionlifetime", LookupEnvOrInt("KEYPROXY_SESSIONLIFETIME", 60), "Session lifetime (minutes)")
 	flag.IntVar(&config.GracefulShutdown, "shutdown", LookupEnvOrInt("KEYPROXY_SHUTDOWN", 30), "Graceful shutdown (seconds)")
 	flag.Parse()
 
+	if config.ForwardedProto != "" && config.ForwardedProto != "http" && config.ForwardedProto != "https" {
+		panic("ForwardedProto must be either empty, 'http' or 'https'")
+	}
 	if config.Port <= 1024 || config.Port > 65535 {
 		panic("Port must be between 1024 and 65535")
+	}
+	if config.PodPort <= 0 || config.PodPort > 65535 {
+		panic("Backend Pod port must be between 0 and 65535")
 	}
 	if config.SigningKey != "" && len(config.SigningKey) < 32 {
 		panic("Signing key must be at least 32 characters long")

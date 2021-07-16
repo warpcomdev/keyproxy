@@ -14,23 +14,25 @@ var ErrorFactoryCancelled = errors.New("PodFactory is being cancelled")
 type PodFactory struct {
 	// TimeKeeper must be at the top of the struct for atomic calls
 	TimeKeeper
-	Logger   *log.Logger
-	Template *template.Template
-	Lifetime time.Duration
-	Scheme   string
-	Port     int
-	managers map[Credentials]*PodManager
+	Logger         *log.Logger
+	Template       *template.Template
+	Lifetime       time.Duration
+	Scheme         string
+	Port           int
+	ForwardedProto string
+	managers       map[Credentials]*PodManager
 }
 
 // NewFactory creates a Factory for PodManagers
-func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Duration, scheme string, port int) *PodFactory {
+func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Duration, scheme string, port int, forwardedProto string) *PodFactory {
 	factory := &PodFactory{
-		Logger:   logger,
-		Template: tmpl,
-		Lifetime: lifetime,
-		Scheme:   scheme,
-		Port:     port,
-		managers: make(map[Credentials]*PodManager),
+		Logger:         logger,
+		Template:       tmpl,
+		Lifetime:       lifetime,
+		Scheme:         scheme,
+		Port:           port,
+		ForwardedProto: forwardedProto,
+		managers:       make(map[Credentials]*PodManager),
 	}
 	// Keep track of time
 	factory.Tick(time.Second)
@@ -82,10 +84,11 @@ func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, e
 		return nil, err
 	}
 	manager := &PodManager{
-		Logger:     f.Logger,
-		Descriptor: pod,
-		Scheme:     f.Scheme,
-		Port:       f.Port,
+		Logger:         f.Logger,
+		Descriptor:     pod,
+		Scheme:         f.Scheme,
+		Port:           f.Port,
+		ForwardedProto: f.ForwardedProto,
 	}
 	f.Group.Add(1)
 	err = manager.Watch(f.cancelCtx, api, f.Lifetime, func() {

@@ -21,8 +21,9 @@ type PodManager struct {
 	Descriptor *PodDescriptor
 	// Scheme and port of the backend server to proxy to.
 	// The IP address will be learnt from the kube cluster.
-	Scheme string
-	Port   int
+	Scheme         string
+	Port           int
+	ForwardedProto string
 	// latest status detected and resulting reverse proxy
 	latest PodInfo
 	proxy  *PodProxy
@@ -188,6 +189,14 @@ func (m *PodManager) reverseProxy(address string) *PodProxy {
 			response.Header.Add("Set-Cookie", cookie.String())
 		}
 		return nil
+	}
+	if m.ForwardedProto != "" {
+		director := tp.Director
+		tp.Director = func(r *http.Request) {
+			m.Logger.WithField("headers", r.Header).Debug("Forwarding headers")
+			director(r)
+			r.Header.Set("X-Forwarded-Proto", m.ForwardedProto)
+		}
 	}
 	return tp
 }

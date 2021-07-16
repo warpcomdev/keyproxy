@@ -62,11 +62,11 @@ func main() {
 		panic(err)
 	}
 
-	logger.WithFields(log.Fields{"port": config.Port}).Info("Building pod factory")
-	factory := NewFactory(logger, tmpl, time.Duration(config.PodLifetime)*time.Minute, "http", config.Port)
+	logger.WithFields(log.Fields{"port": config.PodPort}).Info("Building pod factory")
+	factory := NewFactory(logger, tmpl, time.Duration(config.PodLifetime)*time.Minute, "http", config.PodPort, config.ForwardedProto)
 	defer factory.Cancel()
 
-	logger.Info("Connecting to kubernetes API")
+	logger.WithFields(log.Fields{"keystone": config.KeystoneURL}).Info("Connecting to kubernetes API")
 	api, err := NewAPI(logger, config.Namespace)
 	if err != nil {
 		panic(err)
@@ -88,7 +88,7 @@ func main() {
 
 	// TODO: Get resourceDir from environment variable
 	logger.WithFields(log.Fields{"realm": config.Realm, "resources": config.ResourceFolder}).Info("Building proxy server")
-	proxy, err := NewServer(logger, config.Realm, localResources(logger, config.ResourceFolder), api, auth, factory)
+	proxy, err := NewServer(logger, config.Realm, config.Redirect, localResources(logger, config.ResourceFolder), api, auth, factory)
 	if err != nil {
 		panic(err)
 	}

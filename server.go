@@ -63,6 +63,7 @@ type ProxyHandler struct {
 	TimeKeeper
 	Logger        *log.Logger
 	Realm         string
+	Redirect      string
 	Resources     fs.FS
 	Api           *KubeAPI
 	Auth          *AuthManager
@@ -73,7 +74,7 @@ type ProxyHandler struct {
 }
 
 // NewServer creates new roxy handler
-func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, auth *AuthManager, factory *PodFactory) (*ProxyHandler, error) {
+func NewServer(logger *log.Logger, realm string, redirect string, resources fs.FS, api *KubeAPI, auth *AuthManager, factory *PodFactory) (*ProxyHandler, error) {
 	templateGroup, err := htmlTemplate.New(SpawnTemplate).Funcs(sprig.FuncMap()).ParseFS(resources, "*.html")
 	if err != nil {
 		logger.WithError(err).Error("Failed to load templates")
@@ -83,6 +84,7 @@ func NewServer(logger *log.Logger, realm string, resources fs.FS, api *KubeAPI, 
 		Logger:        logger,
 		Realm:         realm,
 		Resources:     resources,
+		Redirect:      redirect,
 		Api:           api,
 		Auth:          auth,
 		Factory:       factory,
@@ -253,6 +255,15 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Double-check the auth won't fail (it checks a few other things,
+	// like the pod watch)
+	_, err = h.Check(context.TODO(), token)
+	if err != nil {
+		logger.WithError(err).Error("Failed to check JWT token")
+		h.loginPage(w, r, cred, err.Error())
+		return
+	}
+
 	// Save JWT token as Cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     SESSIONCOOKIE,
@@ -366,6 +377,12 @@ func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, INFOPATH, http.StatusTemporaryRedirect)
 		Exhaust(r)
 		return
+	} else {
+		if h.Redirect != "" && r.Method == http.MethodGet && r.URL.Path == "/" {
+			http.Redirect(w, r, h.Redirect, http.StatusTemporaryRedirect)
+			Exhaust(r)
+			return
+		}
 	}
 	// TODO: Only change proxy session when actually needed
 	proxy.CurrentSession(session.AuthSession)
