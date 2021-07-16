@@ -287,7 +287,6 @@ func (h *ProxyHandler) logout(w http.ResponseWriter, r *http.Request) {
 
 // healthz path checks connectivity to kubernetes
 func (h *ProxyHandler) healthz(w http.ResponseWriter, r *http.Request) {
-	h.Logger.Debug("Triggering healthz handler")
 	// Rate limit health cheks to avoid abuse
 	lastHealth := h.lastHealth.Load()
 	timestamp := h.Clock()

@@ -2,19 +2,29 @@ package main
 
 import (
 	"bytes"
-	"errors"
+	"fmt"
 	"io"
 	"net/http"
 
 	log "github.com/sirupsen/logrus"
 )
 
+// MEMORY_BUFFER_SIZE is the amount of bytes to carry in the memory buffer
+const MEMORY_BUFFER_SIZE = 16
+
+// ErrorBufferTooSmall raised when reader has no room
+type ErrorBufferTooSmall string
+
+func (err ErrorBufferTooSmall) Error() string {
+	return string(err)
+}
+
 // ReplaceReader is a hack to make wso2 js work.
 type ReplaceReader struct {
 	Logger *log.Entry
 	body   io.ReadCloser
-	buffer [16]byte
 	memory int
+	buffer [MEMORY_BUFFER_SIZE]byte
 }
 
 // Read implements io.Reader
@@ -26,7 +36,7 @@ func (rb *ReplaceReader) Read(buf []byte) (int, error) {
 	right := []byte("\"wss://\"+")
 	// If there is no room even for the memory, raise an error
 	if len(buf) <= rb.memory {
-		return 0, errors.New("Buffer too small")
+		return 0, ErrorBufferTooSmall(fmt.Sprintf("Buffer too small (%d)", len(buf)))
 	}
 	// Copy the memory from previous read to the buffer
 	if rb.memory > 0 {
@@ -37,7 +47,6 @@ func (rb *ReplaceReader) Read(buf []byte) (int, error) {
 	total := rb.memory + n
 	// If we read something new, search for replace pattern
 	if n > 0 {
-		rb.Logger.WithField("read", n).Debug("Reading body")
 		search := buf[:total]
 		ind := bytes.Index(search, wrong)
 		for ind >= 0 {
@@ -47,15 +56,15 @@ func (rb *ReplaceReader) Read(buf []byte) (int, error) {
 			ind = bytes.Index(search, wrong)
 		}
 	}
+	rb.memory = 0
 	// If there is an error, do not keep memory
 	if err != nil {
-		rb.memory = 0
 		return total, err
 	}
-	// Do not return the whole buffer, save 16 bytes to memory
-	memory := 16
-	if total < memory {
-		return 0, errors.New("Read too small")
+	// Do not return the whole buffer, save MEMORY_BUFFER_SIZE bytes to memory
+	memory := MEMORY_BUFFER_SIZE
+	if total <= memory {
+		return 0, ErrorBufferTooSmall(fmt.Sprintf("Read too small (%d)", total))
 	}
 	copy(rb.buffer[:], buf[(total-memory):total])
 	total -= memory
