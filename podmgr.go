@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -188,6 +191,17 @@ func (m *PodManager) reverseProxy(address string) *PodProxy {
 			}
 			response.Header.Add("Set-Cookie", cookie.String())
 		}
+		// Replace insecure ws:// calls in code with wss://
+		// culprits:
+		// - /editor/js/app-main.js
+		// - /editor/js/service-console-list-manager.js
+		rh := response.Header.Get("Content-Type")
+		if m.ForwardedProto == "https" && strings.EqualFold(rh, "application/javascript") {
+			response.Body = replaceBody{body: response.Body}
+			// Make sure it's both a readCloser and a flusher
+			_ = response.Body.(io.ReadCloser)
+			_ = response.Body.(http.Flusher)
+		}
 		return nil
 	}
 	if m.ForwardedProto != "" {
@@ -199,4 +213,40 @@ func (m *PodManager) reverseProxy(address string) *PodProxy {
 		}
 	}
 	return tp
+}
+
+// ReplaceBody is a hack to make wso2 js work.
+type replaceBody struct {
+	body io.ReadCloser
+}
+
+// Read implements io.Reader
+// Replaces ("ws://" +) with ("wss://"+) in response body.
+// Notice how both strings are same length, so we don't
+// break the Content-Length header.
+func (rb replaceBody) Read(buf []byte) (int, error) {
+	wrong := []byte("\"ws://\" +")
+	right := []byte("\"wss://\"+")
+	n, err := rb.body.Read(buf)
+	if n > 0 {
+		buf = buf[:n]
+		ind := bytes.Index(buf, wrong)
+		for ind >= 0 {
+			buf = buf[ind:]
+			copy(buf, right)
+			ind = bytes.Index(buf, wrong)
+		}
+	}
+	return n, err
+}
+
+func (rb replaceBody) Close() error {
+	return rb.body.Close()
+}
+
+// Flush implements io.Flusher
+func (rb replaceBody) Flush() {
+	if f, ok := rb.body.(http.Flusher); ok {
+		f.Flush()
+	}
 }
