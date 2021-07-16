@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	KEYSTONE                 = "https://auth.iotplatform.telefonica.com:15001"
+	KEYSTONE                 = "https://auth-dev.iotplatform.telefonica.com:15001"
 	PODCONFIG                = "configs/pod.yaml"
 	PODPORT                  = 9390
 	REALM                    = "KeyProxy Auth"

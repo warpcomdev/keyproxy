@@ -3,11 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -195,18 +193,21 @@ func (m *PodManager) reverseProxy(address string) *PodProxy {
 		// culprits:
 		// - /editor/js/app-main.js
 		// - /editor/js/service-console-list-manager.js
-		rh := response.Header.Get("Content-Type")
-		if m.ForwardedProto == "https" && strings.EqualFold(rh, "application/javascript") {
-			logger := m.Logger.WithFields(log.Fields{"url": response.Request.URL.String()})
-			logger.Debug("Triggering body text replacement")
-			response.Body = &ReplaceReader{
-				Logger: logger,
-				body:   response.Body,
+		// This won't work - the files are delivered in gzip encoding
+		/*
+			rh := response.Header.Get("Content-Type")
+			if m.ForwardedProto == "https" && strings.EqualFold(rh, "application/javascript") {
+				logger := m.Logger.WithFields(log.Fields{"url": response.Request.URL.String()})
+				logger.Debug("Triggering body text replacement")
+				response.Body = &ReplaceReader{
+					Logger: logger,
+					body:   response.Body,
+				}
+				// Make sure it's both a readCloser and a flusher
+				_ = response.Body.(io.ReadCloser)
+				_ = response.Body.(http.Flusher)
 			}
-			// Make sure it's both a readCloser and a flusher
-			_ = response.Body.(io.ReadCloser)
-			_ = response.Body.(http.Flusher)
-		}
+		*/
 		return nil
 	}
 	tp.BufferPool = m.Pool

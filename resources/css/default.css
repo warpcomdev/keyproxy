@@ -1,14 +1,15 @@
 body {
-    font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: Roboto, Arial, Helvetica, sans-serif;
+    color: #e8e8e8;
+    background-color: #282828
 }
 table {
     width: 400px;
-    border: 1px solid black;
+    border: 2px solid gray;
 }
 th {
     text-align: left;
-    background-color: gray;
-    color: white;
+    background-color: #1c1c1c;
     padding: 0.5em;
 }
 td {
@@ -16,4 +17,10 @@ td {
 }
 label {
     display: none;
+}
+a {
+    color: #f17b31;
+}
+a:visited {
+    color: #f17b31;
 }
