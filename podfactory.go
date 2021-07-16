@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"errors"
+	"sync"
 	"text/template"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 )
+
+const BUFFER_POOL_SIZE = 32 * 1024 // Same as default pool size for httputil.ReverseProxy
 
 var ErrorFactoryCancelled = errors.New("PodFactory is being cancelled")
 
@@ -20,6 +23,7 @@ type PodFactory struct {
 	Scheme         string
 	Port           int
 	ForwardedProto string
+	BufferPool     sync.Pool
 	managers       map[Credentials]*PodManager
 }
 
@@ -32,7 +36,12 @@ func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Durat
 		Scheme:         scheme,
 		Port:           port,
 		ForwardedProto: forwardedProto,
-		managers:       make(map[Credentials]*PodManager),
+		BufferPool: sync.Pool{
+			New: func() interface{} {
+				return make([]byte, BUFFER_POOL_SIZE)
+			},
+		},
+		managers: make(map[Credentials]*PodManager),
 	}
 	// Keep track of time
 	factory.Tick(time.Second)
@@ -89,6 +98,7 @@ func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, e
 		Scheme:         f.Scheme,
 		Port:           f.Port,
 		ForwardedProto: f.ForwardedProto,
+		Pool:           f,
 	}
 	f.Group.Add(1)
 	err = manager.Watch(f.cancelCtx, api, f.Lifetime, func() {
@@ -102,4 +112,14 @@ func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, e
 		return nil, err
 	}
 	return manager, nil
+}
+
+// Get implements httputil.BufferPool
+func (f *PodFactory) Get() []byte {
+	return f.BufferPool.Get().([]byte)
+}
+
+// Put implements httputil.BufferPool
+func (f *PodFactory) Put(buf []byte) {
+	f.BufferPool.Put(buf)
 }

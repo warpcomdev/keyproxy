@@ -27,6 +27,7 @@ type PodManager struct {
 	Scheme         string
 	Port           int
 	ForwardedProto string
+	Pool           httputil.BufferPool
 	// latest status detected and resulting reverse proxy
 	latest PodInfo
 	proxy  *PodProxy
@@ -209,6 +210,7 @@ func (m *PodManager) reverseProxy(address string) *PodProxy {
 		}
 		return nil
 	}
+	tp.BufferPool = m.Pool
 	if m.ForwardedProto != "" {
 		director := tp.Director
 		tp.Director = func(r *http.Request) {

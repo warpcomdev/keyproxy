@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	// Number of bits of te hash used for anti-bruteforce ratelimit
+	// Number of bits of the hash used for anti-bruteforce ratelimit
 	LOGIN_HASH_BITS = 12
 )
 
