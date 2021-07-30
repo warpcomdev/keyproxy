@@ -15,6 +15,7 @@ type middleware struct {
 	http.Handler
 }
 
+// Middleware constructor facilitates chaining middlewares
 func Middleware(handlerFunc func(w http.ResponseWriter, r *http.Request)) *middleware {
 	return &middleware{
 		Handler: http.HandlerFunc(handlerFunc),
@@ -61,7 +62,7 @@ func (m *middleware) Auth(cookieName string, check func(ctx context.Context, tok
 	return m
 }
 
-// Exhaust the request body to avoid men leaks
+// Exhaust the request body to avoid memory leaks
 func (m *middleware) Exhaust() *middleware {
 	handler := m.Handler
 	m.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +72,7 @@ func (m *middleware) Exhaust() *middleware {
 	return m
 }
 
-// methods check the request method is supported
+// Methods check the request method is supported
 func (m *middleware) Methods(methods ...string) *middleware {
 	handler := m.Handler
 	m.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

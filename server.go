@@ -73,7 +73,7 @@ type ProxyHandler struct {
 	*http.ServeMux
 }
 
-// NewServer creates new roxy handler
+// NewServer creates new proxy handler
 func NewServer(logger *log.Logger, realm string, redirect string, resources fs.FS, api *KubeAPI, auth *AuthManager, factory *PodFactory) (*ProxyHandler, error) {
 	templateGroup, err := htmlTemplate.New(SpawnTemplate).Funcs(sprig.FuncMap()).ParseFS(resources, "*.html")
 	if err != nil {

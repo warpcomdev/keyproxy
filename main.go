@@ -24,7 +24,7 @@ import (
 //go:embed resources/*
 var resources embed.FS
 
-// localResources checks if there is a local folder with resources
+// localResources checks if there is a local folder with resources.
 // Otherwise, it uses the embedded ones.
 func localResources(logger *log.Logger, resourceDir string) fs.FS {
 	loggerCtx := logger.WithField("resources", resourceDir)

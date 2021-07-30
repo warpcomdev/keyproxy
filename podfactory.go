@@ -70,7 +70,7 @@ func (f *PodFactory) Find(api *KubeAPI, creds Credentials) (*PodManager, error) 
 	return mgr, nil
 }
 
-// PodParameters are the parameters
+// PodParameters are the parameters for the pod template
 type PodParameters struct {
 	Username  string
 	Service   string

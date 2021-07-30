@@ -27,7 +27,7 @@ type Credentials struct {
 	Username string
 }
 
-// hash as a double-check that a session is valid.
+// Hash credentials for rate-limiting
 func (cred Credentials) Hash(password string) uint32 {
 	h := fnv.New32a()
 	h.Write([]byte(cred.Service))
@@ -215,7 +215,6 @@ func (m *AuthManager) Watch(ctx context.Context, cred Credentials, session *Auth
 	// Instead, stop timer at every exit point.
 	// defer timer.Stop()
 	for {
-
 		// Calculate remaining time until refresh
 		remaining := session.expiration.Sub(time.Now())
 		switch {

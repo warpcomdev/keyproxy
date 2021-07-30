@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// UnixTimestamp is used to avoid magic int64 type
+// UnixTimestamp defined to avoid having plain int64 type in APIs.
 type UnixTimestamp int64
 
 // AtomicTimestamp stores an atomic unix timestamp
