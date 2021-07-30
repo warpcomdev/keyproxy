@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
@@ -55,6 +56,9 @@ const (
 	Deleted  EventType = EventType(watch.Deleted)
 	Bookmark EventType = EventType(watch.Bookmark)
 	Error    EventType = EventType(watch.Error)
+
+	WatchRetryInterval = 10 * time.Second
+	WatchRetryLimit    = 3
 )
 
 // PodInfo encapsulates the pod information delivered.
@@ -151,33 +155,72 @@ func (k *KubeAPI) WatchPod(ctx context.Context, name string) (<-chan PodInfo, er
 		return nil, err
 	}
 	events := make(chan PodInfo, 16)
-	// Delegates closing the stream and events to forwardEvents
-	go k.forwardEvents(ctx, name, stream, events)
+	go func() {
+		// We observed the watch channel may be broken early, so
+		// this function implements a naive retying feature.
+		defer close(events)
+		logger := k.Logger.WithField("name", name)
+		begin := time.Now()
+		for k.forwardEvents(ctx, logger, name, stream, events) {
+			// Avoid retrying too soon
+			end := time.Now()
+			if end.Sub(begin) < WatchRetryInterval {
+				select {
+				case <-ctx.Done():
+					logger.Info("Kube watch cancelled")
+					return
+				case <-time.After(WatchRetryInterval):
+					logger.Debug("Kube watch finishing too early, waiting")
+					break
+				}
+			}
+			retries := 0
+			for {
+				if stream, err = k.client.CoreV1().Pods(k.Namespace).Watch(ctx, opts); err == nil {
+					break
+				}
+				logger.WithError(err).Error("Failed to watch pod, retrying")
+				retries += 1
+				if retries > WatchRetryLimit {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					logger.Info("Kube watch cancelled")
+					return
+				case <-time.After(WatchRetryInterval):
+					break
+				}
+			}
+			begin = time.Now()
+		}
+	}()
 	return events, nil
 }
 
 // forwardEvents forwards events from watch to events chan.
 // exhaust the event channel to make sure the thread is done.
-func (k *KubeAPI) forwardEvents(ctx context.Context, name string, stream watch.Interface, events chan<- PodInfo) {
-	defer close(events)
-	loggerCtx := k.Logger.WithField("name", name)
+// Will not close the events channel.
+func (k *KubeAPI) forwardEvents(ctx context.Context, logger *log.Entry, name string, stream watch.Interface, events chan<- PodInfo) (retry bool) {
+	defer func() {
+		// Make sure the stream is closed and exhausted, to release the suscription
+		stream.Stop()
+		for range stream.ResultChan() {
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
-			// Stop and exhaust the stream, to release the ssucription
-			stream.Stop()
-			for range stream.ResultChan() {
-			}
-			return
+			return false
 		case event, ok := <-stream.ResultChan():
 			if !ok {
 				// No more events to stream, return
-				loggerCtx.Info("Watch input stream closed")
-				return
+				logger.Info("Watch input stream closed")
+				return true
 			}
 			pod, err := k.castPod(event.Object)
 			if err != nil {
-				loggerCtx.WithField("type", event.Type).WithError(err).Error("Failed to cast event as pod")
+				logger.WithField("type", event.Type).WithError(err).Error("Failed to cast event as pod")
 				continue
 			}
 			events <- PodInfo{
