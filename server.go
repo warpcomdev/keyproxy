@@ -145,12 +145,25 @@ func (h *ProxyHandler) login(w http.ResponseWriter, r *http.Request) {
 	h.loginPage(w, r, Credentials{}, "")
 }
 
-// Parameters passed to login page template
+// LoginParams passed to login page template
 type LoginParams struct {
+	AppScheme string
+	Host      string
 	Service   string
 	Username  string
 	Message   string
 	CSRFToken string
+}
+
+// TemplateParams passed to all other template pages
+type TemplateParams struct {
+	AppScheme string
+	Host      string
+	Service   string
+	Username  string
+	EventType EventType
+	PodPhase  PodPhase
+	Address   string
 }
 
 // loginPage renders the login page template
@@ -172,6 +185,8 @@ func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred Cr
 		HttpOnly: true,
 	})
 	params := LoginParams{
+		AppScheme: h.AppScheme,
+		Host:      r.Host,
 		Service:   cred.Service,
 		Username:  cred.Username,
 		Message:   msg,
@@ -389,17 +404,6 @@ func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request) {
 	// TODO: Only change proxy session when actually needed
 	proxy.CurrentSession(session.AuthSession)
 	proxy.ServeHTTP(w, r)
-}
-
-// TemplateParams contains all the parameters available to templates
-type TemplateParams struct {
-	AppScheme string
-	Host      string
-	Service   string
-	Username  string
-	EventType EventType
-	PodPhase  PodPhase
-	Address   string
 }
 
 func (h *ProxyHandler) NewParams(r *http.Request, session Session, create bool) (TemplateParams, error) {
