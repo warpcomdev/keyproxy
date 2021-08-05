@@ -42,7 +42,7 @@ func GetConfig() *Config {
 	flag.StringVar(&config.Namespace, "namespace", LookupEnvOrString("KEYPROXY_NAMESPACE", ""), "Kubernetes namespace")
 	flag.StringVar(&config.SigningKey, "signingkey", LookupEnvOrString("KEYPROXY_SIGNINGKEY", ""), "Signing key for cookies")
 	flag.StringVar(&config.Redirect, "redirect", LookupEnvOrString("KEYPROXY_REDIRECT", REDIRECT), "Redirect requests for '/' to this path")
-	flag.StringVar(&config.AppScheme, "appscheme", LookupEnvOrString("KEYPROXY_APPSCHEME", "https"), "Scheme (http/https) to use for redirects to the app pages")
+	flag.StringVar(&config.AppScheme, "appscheme", LookupEnvOrString("KEYPROXY_APPSCHEME", ""), "Scheme (http/https) to use for redirects to the app pages (defaults to forwardedProto or https)")
 	flag.StringVar(&config.ForwardedProto, "forwardedproto", LookupEnvOrString("KEYPROXY_FORWARDEDPROTO", FORWARDEDPROTO), "Value for X-Forwarded-Proto header")
 	flag.IntVar(&config.Port, "port", LookupEnvOrInt("KEYPROXY_PORT", 8080), "TCP listen port")
 	flag.IntVar(&config.PodPort, "podport", LookupEnvOrInt("KEYPROXY_PODPORT", PODPORT), "Port the backend pod listens to")
@@ -72,8 +72,14 @@ func GetConfig() *Config {
 	if config.GracefulShutdown < 5 || config.GracefulShutdown > 60 {
 		panic("Graceful shutdown must be between 5 and 60 seconds")
 	}
-	if config.AppScheme != "http" && config.AppScheme != "https" {
-		panic("App Scheme must be either http or https")
+	if config.AppScheme != "" && config.AppScheme != "http" && config.AppScheme != "https" {
+		panic("AppScheme must be either empty, 'http' or 'https'")
+	}
+	if config.AppScheme == "" {
+		config.AppScheme = config.ForwardedProto
+		if config.AppScheme == "" {
+			config.AppScheme = "https"
+		}
 	}
 	return config
 }
