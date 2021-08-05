@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	htmlTemplate "html/template"
 	"io/fs"
 	"net/http"
@@ -62,8 +63,8 @@ type ProxyHandler struct {
 	lastHealth AtomicTimestamp
 	TimeKeeper
 	Logger        *log.Logger
-	Realm         string
-	Redirect      string
+	Redirect      string // Where to redirect requests for "/"
+	AppScheme     string // scheme for the app, "http" or "https"
 	Resources     fs.FS
 	Api           *KubeAPI
 	Auth          *AuthManager
@@ -74,7 +75,7 @@ type ProxyHandler struct {
 }
 
 // NewServer creates new proxy handler
-func NewServer(logger *log.Logger, realm string, redirect string, resources fs.FS, api *KubeAPI, auth *AuthManager, factory *PodFactory) (*ProxyHandler, error) {
+func NewServer(logger *log.Logger, redirect, appscheme string, resources fs.FS, api *KubeAPI, auth *AuthManager, factory *PodFactory) (*ProxyHandler, error) {
 	templateGroup, err := htmlTemplate.New(SpawnTemplate).Funcs(sprig.FuncMap()).ParseFS(resources, "*.html")
 	if err != nil {
 		logger.WithError(err).Error("Failed to load templates")
@@ -82,9 +83,9 @@ func NewServer(logger *log.Logger, realm string, redirect string, resources fs.F
 	}
 	handler := &ProxyHandler{
 		Logger:        logger,
-		Realm:         realm,
 		Resources:     resources,
 		Redirect:      redirect,
+		AppScheme:     appscheme,
 		Api:           api,
 		Auth:          auth,
 		Factory:       factory,
@@ -273,7 +274,8 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 	})
 	// Redirect with "SeeOther" to turn POST into GET
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	redirectURL := fmt.Sprintf("%s://%s", h.AppScheme, r.URL.Host)
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
 // Handle logout path
@@ -311,7 +313,7 @@ func (h *ProxyHandler) healthz(w http.ResponseWriter, r *http.Request) {
 func (h *ProxyHandler) infoPage(w http.ResponseWriter, r *http.Request) {
 	h.Logger.Debug("Triggering Info Page")
 	session := r.Context().Value(SessionKeyType(0)).(Session)
-	params, err := h.NewParams(r.Context(), session, false)
+	params, err := h.NewParams(r, session, false)
 	if err != nil {
 		session.Logger.WithError(err).Error("Failed to get current pod info")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -333,7 +335,7 @@ func (h *ProxyHandler) killPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	params, err := h.NewParams(r.Context(), session, false)
+	params, err := h.NewParams(r, session, false)
 	if err != nil {
 		session.Logger.WithError(err).Error("Failed to create params after killing pod")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -346,7 +348,7 @@ func (h *ProxyHandler) killPage(w http.ResponseWriter, r *http.Request) {
 func (h *ProxyHandler) spawnPage(w http.ResponseWriter, r *http.Request) {
 	h.Logger.Debug("Triggering Spawn Page")
 	session := r.Context().Value(SessionKeyType(0)).(Session)
-	params, err := h.NewParams(r.Context(), session, true)
+	params, err := h.NewParams(r, session, true)
 	if err != nil {
 		session.Logger.WithError(err).Error("Failed to spawn pod")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -373,7 +375,8 @@ func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request) {
 			Exhaust(r)
 			return
 		}
-		http.Redirect(w, r, INFOPATH, http.StatusTemporaryRedirect)
+		redirectURL := fmt.Sprintf("https://%s%s", r.URL.Host, INFOPATH)
+		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 		Exhaust(r)
 		return
 	} else {
@@ -390,6 +393,8 @@ func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request) {
 
 // TemplateParams contains all the parameters available to templates
 type TemplateParams struct {
+	AppScheme string
+	Host      string
 	Service   string
 	Username  string
 	EventType EventType
@@ -397,12 +402,14 @@ type TemplateParams struct {
 	Address   string
 }
 
-func (h *ProxyHandler) NewParams(ctx context.Context, session Session, create bool) (TemplateParams, error) {
-	_, info, err := session.Manager.Proxy(ctx, h.Api, create)
+func (h *ProxyHandler) NewParams(r *http.Request, session Session, create bool) (TemplateParams, error) {
+	_, info, err := session.Manager.Proxy(r.Context(), h.Api, create)
 	if err != nil {
 		return TemplateParams{}, err
 	}
 	params := TemplateParams{
+		AppScheme: h.AppScheme,
+		Host:      r.URL.Host,
 		Service:   session.Credentials.Service,
 		Username:  session.Credentials.Username,
 		EventType: info.Type,
