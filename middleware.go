@@ -23,7 +23,7 @@ func Middleware(handlerFunc func(w http.ResponseWriter, r *http.Request)) *middl
 }
 
 // Auth checks authentication and stores session in context.
-func (m *middleware) Auth(cookieName string, check func(ctx context.Context, token string) (context.Context, error), redirect bool) *middleware {
+func (m *middleware) Auth(cookieName string, check func(ctx context.Context, token string) (context.Context, error), redirectAlways bool) *middleware {
 	handler := m.Handler
 	m.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
@@ -50,8 +50,9 @@ func (m *middleware) Auth(cookieName string, check func(ctx context.Context, tok
 
 		// Check if we could retrieve the context
 		if ctx == nil {
-			if redirect || (r.URL.Path == "/" && r.Method == http.MethodGet) {
-				http.Redirect(w, r, LOGINPATH, statusRedirect)
+			if redirectAlways || (r.URL.Path == "/" && r.Method == http.MethodGet) {
+				redirectPath := fmt.Sprintf("https://%s%s", r.URL.Host, LOGINPATH)
+				http.Redirect(w, r, redirectPath, statusRedirect)
 			} else {
 				http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 			}

@@ -87,8 +87,8 @@ func main() {
 	defer auth.Cancel()
 
 	// TODO: Get resourceDir from environment variable
-	logger.WithFields(log.Fields{"realm": config.Realm, "resources": config.ResourceFolder}).Info("Building proxy server")
-	proxy, err := NewServer(logger, config.Realm, config.Redirect, localResources(logger, config.ResourceFolder), api, auth, factory)
+	logger.WithFields(log.Fields{"appscheme": config.AppScheme, "resources": config.ResourceFolder}).Info("Building proxy server")
+	proxy, err := NewServer(logger, config.Redirect, config.AppScheme, localResources(logger, config.ResourceFolder), api, auth, factory)
 	if err != nil {
 		panic(err)
 	}

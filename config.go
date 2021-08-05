@@ -11,7 +11,6 @@ const (
 	KEYSTONE                 = "https://auth-dev.iotplatform.telefonica.com:15001"
 	PODCONFIG                = "configs/pod.yaml"
 	PODPORT                  = 9390
-	REALM                    = "KeyProxy Auth"
 	REDIRECT                 = "/editor"
 	FORWARDEDPROTO           = ""
 	POD_LIFETIME_MINUTE      = 120
@@ -22,8 +21,8 @@ const (
 type Config struct {
 	KeystoneURL      string
 	PodConfig        string
-	Realm            string
 	Redirect         string
+	AppScheme        string
 	ResourceFolder   string
 	ForwardedProto   string
 	Port             int
@@ -39,11 +38,11 @@ func GetConfig() *Config {
 	config := &Config{}
 	flag.StringVar(&config.KeystoneURL, "keystone", LookupEnvOrString("KEYPROXY_KEYSTONE", KEYSTONE), "Keystone URL")
 	flag.StringVar(&config.PodConfig, "podconfig", LookupEnvOrString("KEYPROXY_PODCONFIG", PODCONFIG), "Path to pod config file")
-	flag.StringVar(&config.Realm, "realm", LookupEnvOrString("KEYPROXY_REALM", REALM), "http service listen address")
 	flag.StringVar(&config.ResourceFolder, "resources", LookupEnvOrString("KEYPROXY_RESOURCES", "resources"), "Path to static assets folder")
 	flag.StringVar(&config.Namespace, "namespace", LookupEnvOrString("KEYPROXY_NAMESPACE", ""), "Kubernetes namespace")
 	flag.StringVar(&config.SigningKey, "signingkey", LookupEnvOrString("KEYPROXY_SIGNINGKEY", ""), "Signing key for cookies")
 	flag.StringVar(&config.Redirect, "redirect", LookupEnvOrString("KEYPROXY_REDIRECT", REDIRECT), "Redirect requests for '/' to this path")
+	flag.StringVar(&config.AppScheme, "appscheme", LookupEnvOrString("KEYPROXY_APPSCHEME", "https"), "Scheme (http/https) to use for redirects to the app pages")
 	flag.StringVar(&config.ForwardedProto, "forwardedproto", LookupEnvOrString("KEYPROXY_FORWARDEDPROTO", FORWARDEDPROTO), "Value for X-Forwarded-Proto header")
 	flag.IntVar(&config.Port, "port", LookupEnvOrInt("KEYPROXY_PORT", 8080), "TCP listen port")
 	flag.IntVar(&config.PodPort, "podport", LookupEnvOrInt("KEYPROXY_PODPORT", PODPORT), "Port the backend pod listens to")
@@ -72,6 +71,9 @@ func GetConfig() *Config {
 	}
 	if config.GracefulShutdown < 5 || config.GracefulShutdown > 60 {
 		panic("Graceful shutdown must be between 5 and 60 seconds")
+	}
+	if config.AppScheme != "http" && config.AppScheme != "https" {
+		panic("App Scheme must be either http or https")
 	}
 	return config
 }
