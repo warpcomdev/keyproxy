@@ -274,7 +274,7 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 	})
 	// Redirect with "SeeOther" to turn POST into GET
-	redirectURL := fmt.Sprintf("%s://%s", h.AppScheme, r.URL.Host)
+	redirectURL := fmt.Sprintf("%s://%s", h.AppScheme, r.Host)
 	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
@@ -375,7 +375,7 @@ func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request) {
 			Exhaust(r)
 			return
 		}
-		redirectURL := fmt.Sprintf("https://%s%s", r.URL.Host, INFOPATH)
+		redirectURL := fmt.Sprintf("https://%s%s", r.Host, INFOPATH)
 		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 		Exhaust(r)
 		return
@@ -409,7 +409,7 @@ func (h *ProxyHandler) NewParams(r *http.Request, session Session, create bool) 
 	}
 	params := TemplateParams{
 		AppScheme: h.AppScheme,
-		Host:      r.URL.Host,
+		Host:      r.Host,
 		Service:   session.Credentials.Service,
 		Username:  session.Credentials.Username,
 		EventType: info.Type,

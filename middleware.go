@@ -51,7 +51,7 @@ func (m *middleware) Auth(cookieName string, check func(ctx context.Context, tok
 		// Check if we could retrieve the context
 		if ctx == nil {
 			if redirectAlways || (r.URL.Path == "/" && r.Method == http.MethodGet) {
-				redirectPath := fmt.Sprintf("https://%s%s", r.URL.Host, LOGINPATH)
+				redirectPath := fmt.Sprintf("https://%s%s", r.Host, LOGINPATH)
 				http.Redirect(w, r, redirectPath, statusRedirect)
 			} else {
 				http.Error(w, "Invalid credentials", http.StatusUnauthorized)
