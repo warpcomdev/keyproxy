@@ -7,14 +7,8 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"sync"
-	"time"
 
 	log "github.com/sirupsen/logrus"
-)
-
-const (
-	WatchRetryInterval = 10 * time.Second
-	WatchRetryLimit    = 3
 )
 
 // PodManager handles the suscription to a pod's events
@@ -71,7 +65,7 @@ func (m *PodManager) Delete(ctx context.Context, api *KubeAPI) error {
 func (m *PodManager) updateStatus(ctx context.Context, api *KubeAPI, create bool) error {
 	// If we don't know the pod status, ask for it
 	if m.latest.Phase == "" {
-		info, err := api.PodStatus(ctx, m.Descriptor.Name)
+		info, err := api.PodStatus(m.Descriptor.Name)
 		if err != nil {
 			return err
 		}
@@ -92,100 +86,24 @@ func (m *PodManager) updateStatus(ctx context.Context, api *KubeAPI, create bool
 	return nil
 }
 
-// Watch the pod status to keep updating the proxy when IP address changes.
-// If the watch is closed or the ctx or lifetime expire, it calls the cleanup func.
-// If it returns an error, it will NOT call the cleanup function.
-func (m *PodManager) Watch(ctx context.Context, api *KubeAPI, lifetime time.Duration, cleanup func()) error {
-	cancelCtx, cancelFunc := context.WithCancel(ctx)
-	watch, err := api.WatchPod(cancelCtx, m.Descriptor.Name)
-	if err != nil {
-		cancelFunc() // Just in case
-		return err
+// Update the pod info where there is a status change
+func (m *PodManager) Update(info PodInfo) error {
+	logger := m.Logger.WithField("event", info)
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	switch {
+	case info.Type == Deleted || info.Phase != PodRunning || info.Address == "":
+		logger.Info("Pod not ready for proxy")
+		m.proxy = nil
+	case m.latest.Address != info.Address:
+		logger.Info("Updating proxy address")
+		m.proxy = m.reverseProxy(info.Address)
 	}
-	logger := m.Logger.WithField("name", m.Descriptor.Name)
-	go func() {
-		deadline := time.NewTimer(lifetime + time.Second)
-		defer func() {
-			// Stop the timer, if still running
-			if deadline != nil {
-				deadline.Stop()
-			}
-			// Make sure we exhaust the watch, if open
-			cancelFunc()
-			if watch != nil {
-				for range watch {
-				}
-			}
-			cleanup()
-		}()
-		for {
-			deadline = m.watchOnce(cancelCtx, logger, api, watch, deadline, lifetime)
-			// If deadline is nil, then either the watch
-			// was cancelled, of the pod was deleted. Abort.
-			if deadline == nil {
-				return
-			}
-			// Otherwwise, the watch ended abruptly. Try to watch again.
-			for retries := 0; retries < WatchRetryLimit; retries++ {
-				logger.WithField("retry", retries).Info("Retrying watch pod")
-				watch, err = api.WatchPod(cancelCtx, m.Descriptor.Name)
-				if err == nil {
-					break
-				}
-				logger.WithError(err).Error("Failed to re-start watch")
-				watch = nil
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(WatchRetryInterval):
-					break
-				}
-			}
-			if watch == nil {
-				logger.Warning("Aborting watch after max retries")
-				return
-			}
-		}
-	}()
+	m.latest = info
+	if info.Type == Deleted {
+		m.pendingDelete = false
+	}
 	return nil
-}
-
-func (m *PodManager) watchOnce(ctx context.Context, logger *log.Entry, api *KubeAPI, watch <-chan PodInfo, deadline *time.Timer, lifetime time.Duration) *time.Timer {
-	for {
-		select {
-		case <-deadline.C:
-			remaining := m.Timestamp.Remaining(lifetime)
-			if remaining <= 0 {
-				logger.Info("Watch thread expired, deleting pod")
-				m.Delete(ctx, api)
-				return nil
-			}
-			deadline = time.NewTimer(remaining + time.Second)
-		case <-ctx.Done():
-			logger.Info("Watch thread context cancelled")
-			return nil
-		case info, ok := <-watch:
-			if !ok {
-				logger.Info("Watch thread finished")
-				return deadline
-			}
-			loggerEvent := logger.WithField("event", info)
-			m.mutex.Lock()
-			switch {
-			case info.Type == Deleted || info.Phase != PodRunning || info.Address == "":
-				loggerEvent.Info("Pod not ready for proxy")
-				m.proxy = nil
-			case m.latest.Address != info.Address:
-				loggerEvent.Info("Updating proxy address")
-				m.proxy = m.reverseProxy(info.Address)
-			}
-			m.latest = info
-			if info.Type == Deleted {
-				m.pendingDelete = false
-			}
-			m.mutex.Unlock()
-		}
-	}
 }
 
 type PodProxy struct {

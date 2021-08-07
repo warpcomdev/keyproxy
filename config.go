@@ -23,6 +23,7 @@ type Config struct {
 	PodConfig        string
 	Redirect         string
 	AppScheme        string
+	ProxyScheme      string
 	ResourceFolder   string
 	ForwardedProto   string
 	Port             int
@@ -32,6 +33,7 @@ type Config struct {
 	PodLifetime      int
 	SessionLifetime  int
 	GracefulShutdown int
+	Threads          int
 }
 
 func GetConfig() *Config {
@@ -42,6 +44,7 @@ func GetConfig() *Config {
 	flag.StringVar(&config.Namespace, "namespace", LookupEnvOrString("KEYPROXY_NAMESPACE", ""), "Kubernetes namespace")
 	flag.StringVar(&config.SigningKey, "signingkey", LookupEnvOrString("KEYPROXY_SIGNINGKEY", ""), "Signing key for cookies")
 	flag.StringVar(&config.Redirect, "redirect", LookupEnvOrString("KEYPROXY_REDIRECT", REDIRECT), "Redirect requests for '/' to this path")
+	flag.StringVar(&config.ProxyScheme, "proxyscheme", LookupEnvOrString("KEYPROXY_PROXYSCHEME", ""), "Scheme (http/https) to use for redirects to the login page (defaults to forwardedProto or https)")
 	flag.StringVar(&config.AppScheme, "appscheme", LookupEnvOrString("KEYPROXY_APPSCHEME", ""), "Scheme (http/https) to use for redirects to the app pages (defaults to forwardedProto or https)")
 	flag.StringVar(&config.ForwardedProto, "forwardedproto", LookupEnvOrString("KEYPROXY_FORWARDEDPROTO", FORWARDEDPROTO), "Value for X-Forwarded-Proto header")
 	flag.IntVar(&config.Port, "port", LookupEnvOrInt("KEYPROXY_PORT", 8080), "TCP listen port")
@@ -49,6 +52,7 @@ func GetConfig() *Config {
 	flag.IntVar(&config.PodLifetime, "podlifetime", LookupEnvOrInt("KEYPROXY_PODLIFETIME", 120), "Pod Lifetime (minutes)")
 	flag.IntVar(&config.SessionLifetime, "sessionlifetime", LookupEnvOrInt("KEYPROXY_SESSIONLIFETIME", 60), "Session lifetime (minutes)")
 	flag.IntVar(&config.GracefulShutdown, "shutdown", LookupEnvOrInt("KEYPROXY_SHUTDOWN", 30), "Graceful shutdown (seconds)")
+	flag.IntVar(&config.Threads, "threads", LookupEnvOrInt("KEYPROXY_THREADS", 10), "Number of controller threads")
 	flag.Parse()
 
 	if config.ForwardedProto != "" && config.ForwardedProto != "http" && config.ForwardedProto != "https" {
@@ -80,6 +84,18 @@ func GetConfig() *Config {
 		if config.AppScheme == "" {
 			config.AppScheme = "https"
 		}
+	}
+	if config.ProxyScheme != "" && config.ProxyScheme != "http" && config.ProxyScheme != "https" {
+		panic("ProxyScheme must be either empty, 'http' or 'https'")
+	}
+	if config.ProxyScheme == "" {
+		config.ProxyScheme = config.ForwardedProto
+		if config.ProxyScheme == "" {
+			config.ProxyScheme = "https"
+		}
+	}
+	if config.Threads <= 0 || config.Threads > 1000 {
+		panic("Threads must be between 1 and 1000")
 	}
 	return config
 }

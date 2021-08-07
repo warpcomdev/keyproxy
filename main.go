@@ -66,13 +66,14 @@ func main() {
 	factory := NewFactory(logger, tmpl, time.Duration(config.PodLifetime)*time.Minute, "http", config.PodPort, config.ForwardedProto)
 	defer factory.Cancel()
 
-	logger.WithFields(log.Fields{"keystone": config.KeystoneURL}).Info("Connecting to kubernetes API")
-	api, err := NewAPI(logger, config.Namespace)
+	logger.WithFields(log.Fields{"namespace": config.Namespace}).Info("Connecting to kubernetes API")
+	api, err := NewLoop(logger, config.Namespace, factory, config.Threads)
 	if err != nil {
 		panic(err)
 	}
+	defer api.Cancel()
 
-	logger.Info("Building auth manager")
+	logger.WithFields(log.Fields{"keystone": config.KeystoneURL}).Info("Building auth manager")
 	// Use random signing key. Beware if we ever deploy more than one pod.
 	var signingKey []byte
 	if config.SigningKey != "" {
@@ -87,8 +88,8 @@ func main() {
 	defer auth.Cancel()
 
 	// TODO: Get resourceDir from environment variable
-	logger.WithFields(log.Fields{"appscheme": config.AppScheme, "resources": config.ResourceFolder}).Info("Building proxy server")
-	proxy, err := NewServer(logger, config.Redirect, config.AppScheme, localResources(logger, config.ResourceFolder), api, auth, factory)
+	logger.WithFields(log.Fields{"proxyscheme": config.ProxyScheme, "appscheme": config.AppScheme, "resources": config.ResourceFolder}).Info("Building proxy server")
+	proxy, err := NewServer(logger, config.Redirect, config.ProxyScheme, config.AppScheme, localResources(logger, config.ResourceFolder), api, auth, factory)
 	if err != nil {
 		panic(err)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"sync"
 	"text/template"
@@ -25,6 +26,7 @@ type PodFactory struct {
 	ForwardedProto string
 	BufferPool     sync.Pool
 	managers       map[Credentials]*PodManager
+	managersByKey  map[string]*PodManager
 }
 
 // NewFactory creates a Factory for PodManagers
@@ -41,7 +43,8 @@ func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Durat
 				return make([]byte, BUFFER_POOL_SIZE)
 			},
 		},
-		managers: make(map[Credentials]*PodManager),
+		managers:      make(map[Credentials]*PodManager),
+		managersByKey: make(map[string]*PodManager),
 	}
 	// Keep track of time
 	factory.Tick(time.Second)
@@ -50,7 +53,7 @@ func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Durat
 
 // Find manager for the given credentials.
 func (f *PodFactory) Find(api *KubeAPI, creds Credentials) (*PodManager, error) {
-	ctxLogger := f.Logger.WithField("creds", creds)
+	logger := f.Logger.WithField("creds", creds)
 	f.Mutex.Lock()
 	defer f.Mutex.Unlock()
 	mgr, ok := f.managers[creds]
@@ -58,13 +61,12 @@ func (f *PodFactory) Find(api *KubeAPI, creds Credentials) (*PodManager, error) 
 		if f.cancelFunc == nil {
 			return nil, ErrorFactoryCancelled
 		}
-		ctxLogger.Info("Creating new manager")
+		logger.Info("Creating new manager")
 		var err error // Beware! we can't do ":=" below, otherwise it would shadow mgr above
 		mgr, err = f.newManager(api, creds)
 		if err != nil {
 			return nil, err
 		}
-		f.managers[creds] = mgr
 	}
 	mgr.Timestamp.Store(f.Clock())
 	return mgr, nil
@@ -77,7 +79,8 @@ type PodParameters struct {
 	Namespace string
 }
 
-// newManager creates a manager and starts the pod watch
+// newManager creates a manager and starts the pod watch.
+// This must be called with the mutex held.
 func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, error) {
 	buffer := &bytes.Buffer{}
 	params := PodParameters{
@@ -100,18 +103,55 @@ func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, e
 		ForwardedProto: f.ForwardedProto,
 		Pool:           f,
 	}
+	f.managers[creds] = manager
+	f.managersByKey[pod.GetName()] = manager
 	f.Group.Add(1)
-	err = manager.Watch(f.cancelCtx, api, f.Lifetime, func() {
-		defer f.Group.Done()
-		f.Mutex.Lock()
-		delete(f.managers, creds)
-		f.Mutex.Unlock()
-	})
-	if err != nil {
-		f.Group.Done() // since cleanup function above won't be called
-		return nil, err
-	}
+	go f.watch(api, creds, manager)
 	return manager, nil
+}
+
+// Watch podmanager lifetime, calls f.Group.Done() when done
+func (f *PodFactory) watch(api *KubeAPI, creds Credentials, manager *PodManager) {
+	defer f.Group.Done()
+	deadline := time.NewTimer(f.Lifetime + time.Second)
+	logger := f.Logger.WithFields(log.Fields{"creds": creds, "name": manager.Descriptor.GetName()})
+	for {
+		select {
+		case <-deadline.C:
+			remaining := manager.Timestamp.Remaining(f.Lifetime)
+			if remaining <= 0 {
+				logger.Info("Watch thread expired, deleting pod")
+				ctx, cancelFunc := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
+				err := manager.Delete(ctx, api)
+				cancelFunc()
+				if err == nil {
+					// Also remove the pod from the maps
+					f.Mutex.Lock()
+					delete(f.managers, creds)
+					delete(f.managersByKey, manager.Descriptor.GetName())
+					f.Mutex.Unlock()
+					return
+				}
+				logger.WithError(err).Error("Failed to remove pod")
+				remaining = f.Lifetime / 2
+			}
+			deadline = time.NewTimer(remaining + time.Second)
+		case <-f.cancelCtx.Done():
+			deadline.Stop()
+			return
+		}
+	}
+}
+
+// Update manager status on pod info received
+func (f *PodFactory) Update(info PodInfo) error {
+	f.Mutex.Lock()
+	manager, ok := f.managersByKey[info.Name]
+	f.Mutex.Unlock()
+	if ok {
+		manager.Update(info)
+	}
+	return nil
 }
 
 // Get implements httputil.BufferPool

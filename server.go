@@ -64,6 +64,7 @@ type ProxyHandler struct {
 	TimeKeeper
 	Logger        *log.Logger
 	Redirect      string // Where to redirect requests for "/"
+	ProxyScheme   string // // scheme for the login page, "http" or "https"
 	AppScheme     string // scheme for the app, "http" or "https"
 	Resources     fs.FS
 	Api           *KubeAPI
@@ -75,7 +76,7 @@ type ProxyHandler struct {
 }
 
 // NewServer creates new proxy handler
-func NewServer(logger *log.Logger, redirect, appscheme string, resources fs.FS, api *KubeAPI, auth *AuthManager, factory *PodFactory) (*ProxyHandler, error) {
+func NewServer(logger *log.Logger, redirect, proxyscheme, appscheme string, resources fs.FS, api *KubeAPI, auth *AuthManager, factory *PodFactory) (*ProxyHandler, error) {
 	templateGroup, err := htmlTemplate.New(SpawnTemplate).Funcs(sprig.FuncMap()).ParseFS(resources, "*.html")
 	if err != nil {
 		logger.WithError(err).Error("Failed to load templates")
@@ -85,6 +86,7 @@ func NewServer(logger *log.Logger, redirect, appscheme string, resources fs.FS, 
 		Logger:        logger,
 		Resources:     resources,
 		Redirect:      redirect,
+		ProxyScheme:   proxyscheme,
 		AppScheme:     appscheme,
 		Api:           api,
 		Auth:          auth,
@@ -96,12 +98,12 @@ func NewServer(logger *log.Logger, redirect, appscheme string, resources fs.FS, 
 	rand.Read(handler.csrfSecret)
 	handler.Handle(RESOURCEPATH, http.StripPrefix(RESOURCEPATH, http.FileServer(http.FS(resources))))
 	handler.Handle(LOGINPATH, Middleware(handler.login).Methods(http.MethodGet, http.MethodPost).Exhaust())
-	handler.Handle(LOGOUTPATH, Middleware(handler.logout).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(LOGOUTPATH, Middleware(handler.logout).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
 	handler.Handle(HEALTHZPATH, Middleware(handler.healthz).Methods(http.MethodGet).Exhaust())
-	handler.Handle(INFOPATH, Middleware(handler.infoPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle(KILLPATH, Middleware(handler.killPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle(SPAWNPATH, Middleware(handler.spawnPage).Auth(SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle("/", Middleware(handler.forward).Auth(SESSIONCOOKIE, handler.Check, false)) // do not exhaust, in case it upgrades to websocket
+	handler.Handle(INFOPATH, Middleware(handler.infoPage).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(KILLPATH, Middleware(handler.killPage).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(SPAWNPATH, Middleware(handler.spawnPage).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle("/", Middleware(handler.forward).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, false)) // do not exhaust, in case it upgrades to websocket
 	// Add support for pprof
 	handler.Handle("/debug/pprof", http.DefaultServeMux)
 	handler.Tick(time.Second)
@@ -147,23 +149,25 @@ func (h *ProxyHandler) login(w http.ResponseWriter, r *http.Request) {
 
 // LoginParams passed to login page template
 type LoginParams struct {
-	AppScheme string
-	Host      string
-	Service   string
-	Username  string
-	Message   string
-	CSRFToken string
+	ProxyScheme string
+	AppScheme   string
+	Host        string
+	Service     string
+	Username    string
+	Message     string
+	CSRFToken   string
 }
 
 // TemplateParams passed to all other template pages
 type TemplateParams struct {
-	AppScheme string
-	Host      string
-	Service   string
-	Username  string
-	EventType EventType
-	PodPhase  PodPhase
-	Address   string
+	ProxyScheme string
+	AppScheme   string
+	Host        string
+	Service     string
+	Username    string
+	EventType   EventType
+	PodPhase    PodPhase
+	Address     string
 }
 
 // loginPage renders the login page template
@@ -185,12 +189,13 @@ func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred Cr
 		HttpOnly: true,
 	})
 	params := LoginParams{
-		AppScheme: h.AppScheme,
-		Host:      r.Host,
-		Service:   cred.Service,
-		Username:  cred.Username,
-		Message:   msg,
-		CSRFToken: csrfToken,
+		ProxyScheme: h.ProxyScheme,
+		AppScheme:   h.AppScheme,
+		Host:        r.Host,
+		Service:     cred.Service,
+		Username:    cred.Username,
+		Message:     msg,
+		CSRFToken:   csrfToken,
 	}
 	if err := h.templateGroup.ExecuteTemplate(w, LoginTemplate, params); err != nil {
 		h.Logger.WithError(err).Error("Failed to render login template")
@@ -390,7 +395,7 @@ func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request) {
 			Exhaust(r)
 			return
 		}
-		redirectURL := fmt.Sprintf("https://%s%s", r.Host, INFOPATH)
+		redirectURL := fmt.Sprintf("%s://%s%s", h.ProxyScheme, r.Host, INFOPATH)
 		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 		Exhaust(r)
 		return
@@ -412,13 +417,14 @@ func (h *ProxyHandler) NewParams(r *http.Request, session Session, create bool) 
 		return TemplateParams{}, err
 	}
 	params := TemplateParams{
-		AppScheme: h.AppScheme,
-		Host:      r.Host,
-		Service:   session.Credentials.Service,
-		Username:  session.Credentials.Username,
-		EventType: info.Type,
-		PodPhase:  info.Phase,
-		Address:   info.Address,
+		ProxyScheme: h.ProxyScheme,
+		AppScheme:   h.AppScheme,
+		Host:        r.Host,
+		Service:     session.Credentials.Service,
+		Username:    session.Credentials.Username,
+		EventType:   info.Type,
+		PodPhase:    info.Phase,
+		Address:     info.Address,
 	}
 	return params, nil
 }

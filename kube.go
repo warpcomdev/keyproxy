@@ -3,24 +3,28 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/informers"
+	informersv1 "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
+	"k8s.io/client-go/util/workqueue"
 )
 
 // PodPhase encapsulates kubernetes own PodPhase type
@@ -55,13 +59,22 @@ const (
 	Deleted  EventType = EventType(watch.Deleted)
 	Bookmark EventType = EventType(watch.Bookmark)
 	Error    EventType = EventType(watch.Error)
+
+	// Maximum number of retries por handler
+	MaxRetries = 3
 )
 
 // PodInfo encapsulates the pod information delivered.
 type PodInfo struct {
+	Name    string
 	Type    EventType
 	Phase   PodPhase
 	Address string
+}
+
+// EventHandler manages events
+type EventHandler interface {
+	Update(info PodInfo) error
 }
 
 // PodKindError raised when received event for an object which is not a pod.
@@ -71,16 +84,22 @@ func (err PodKindError) Error() string {
 	return string(err)
 }
 
+var CacheSyncError = errors.New("Failed to synchronize cache")
+
 // KubeAPI encapsulates calls to Kubernetes API
 type KubeAPI struct {
 	Logger         *log.Logger
 	KubeconfigPath string
 	Namespace      string
 	client         *kubernetes.Clientset
+	podInformer    informersv1.PodInformer
+	queue          workqueue.RateLimitingInterface
+	waitGroup      sync.WaitGroup
+	cancelFunc     func()
 }
 
 // NewAPI tries to build API by autodiscovering cluster and namespace
-func NewAPI(logger *log.Logger, namespace string) (*KubeAPI, error) {
+func NewLoop(logger *log.Logger, namespace string, handler EventHandler, threads int) (*KubeAPI, error) {
 	k := &KubeAPI{
 		Logger:         logger,
 		KubeconfigPath: filepath.Join(homedir.HomeDir(), ".kube", "config"),
@@ -106,7 +125,41 @@ func NewAPI(logger *log.Logger, namespace string) (*KubeAPI, error) {
 		namespace = k.namespace()
 	}
 	k.Namespace = namespace
+	// Build informer. TODO: Improve filtering
+	informerFactory := informers.NewSharedInformerFactoryWithOptions(clientset, time.Minute*30, informers.WithNamespace(k.Namespace))
+	k.podInformer = informerFactory.Core().V1().Pods()
+	// Start informerFactory and wait for sync
+	logger.Info("Starting informer factory and waiting for cache sync")
+	cancelCtx, cancelFunc := context.WithCancel(context.Background())
+	k.cancelFunc = cancelFunc
+	informerFactory.Start(cancelCtx.Done())
+	for _, ok := range informerFactory.WaitForCacheSync(cancelCtx.Done()) {
+		if !ok {
+			return nil, CacheSyncError
+		}
+	}
+	// Create queue and workers
+	logger.Info("Starting controller threads")
+	k.queue = workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
+	for i := 0; i < threads; i++ {
+		k.waitGroup.Add(1)
+		go k.dequeue(handler)
+	}
+	// Start informer
+	logger.Info("Starting informer.Run")
+	k.waitGroup.Add(1)
+	go k.enqueue(cancelCtx)
 	return k, nil
+}
+
+// Cancel the factory and listeners
+func (k *KubeAPI) Cancel() {
+	if k.cancelFunc != nil {
+		k.cancelFunc() // this will stop the informerFactory and informer
+		k.cancelFunc = nil
+	}
+	k.queue.ShutDown()
+	k.waitGroup.Wait()
 }
 
 // See https://github.com/kubernetes/kubernetes/pull/63707
@@ -130,67 +183,107 @@ func (k *KubeAPI) namespace() string {
 }
 
 // PodStatus gets the pod's current status and IP address
-func (k *KubeAPI) PodStatus(ctx context.Context, name string) (PodInfo, error) {
-	pod, err := k.client.CoreV1().Pods(k.Namespace).Get(ctx, name, metav1.GetOptions{})
+func (k *KubeAPI) PodStatus(name string) (PodInfo, error) {
+	pod, err := k.podInformer.Lister().Pods(k.Namespace).Get(name)
 	if err != nil {
 		if kerrors.IsNotFound(err) {
-			return PodInfo{Type: Deleted, Phase: PodUnknown}, nil
+			return PodInfo{Name: name, Type: Deleted, Phase: PodUnknown}, nil
 		}
-		return PodInfo{Type: Error, Phase: PodUnknown}, err
+		return PodInfo{Name: name, Type: Error, Phase: PodUnknown}, err
 	}
-	return PodInfo{Type: Modified, Phase: PodPhase(pod.Status.Phase), Address: pod.Status.PodIP}, nil
+	return PodInfo{Name: name, Type: Modified, Phase: PodPhase(pod.Status.Phase), Address: pod.Status.PodIP}, nil
 }
 
-// WatchPod subscribes to the pod's PodInfo events
-func (k *KubeAPI) WatchPod(ctx context.Context, name string) (<-chan PodInfo, error) {
-	opts := metav1.ListOptions{
-		FieldSelector: fields.OneTermEqualSelector(metav1.ObjectNameField, name).String(),
+// Enqueue informer events to work queue
+func (k *KubeAPI) enqueue(ctx context.Context) {
+	defer k.waitGroup.Done()
+	defer utilruntime.HandleCrash()
+	logger := k.Logger
+	logger.Info("Starting pod watch")
+	k.podInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			k.onUpdate(cache.MetaNamespaceKeyFunc(obj))
+		},
+		UpdateFunc: func(old, new interface{}) {
+			k.onUpdate(cache.MetaNamespaceKeyFunc(new))
+		},
+		DeleteFunc: func(obj interface{}) {
+			k.onUpdate(cache.DeletionHandlingMetaNamespaceKeyFunc(obj))
+		},
+	})
+	k.podInformer.Informer().Run(ctx.Done())
+	logger.Info("Exiting pod watch")
+}
+
+// onUpdate queues the key if err is nil
+func (k *KubeAPI) onUpdate(key string, err error) {
+	if err != nil {
+		k.Logger.WithError(err).Error("Failed to decode received obj")
+		return
 	}
-	stream, err := k.client.CoreV1().Pods(k.Namespace).Watch(ctx, opts)
+	k.queue.Add(key)
+}
+
+// dequete work items
+func (k *KubeAPI) dequeue(handler EventHandler) {
+	defer k.waitGroup.Done()
+	defer utilruntime.HandleCrash()
+	for k.forwardEvent(handler) {
+	}
+}
+
+// forwardEvent manages the item
+func (k *KubeAPI) forwardEvent(handler EventHandler) bool {
+	obj, shutdown := k.queue.Get()
+	if shutdown {
+		return false
+	}
+	defer k.queue.Done(obj)
+	key, ok := obj.(string)
+	if !ok {
+		k.Logger.WithField("obj", obj).Error("Unexpected object in work queue")
+		k.queue.Forget(obj)
+		return true
+	}
+	logger := k.Logger.WithField("key", key)
+	_, name, err := cache.SplitMetaNamespaceKey(key)
+	if err != nil {
+		logger.WithError(err).Error("Failed to split key into namespace and name")
+		k.queue.Forget(obj)
+		return true
+	}
+	info, err := k.PodStatus(name)
+	if err == nil {
+		err = handler.Update(info)
+	}
+	switch {
+	case err == nil:
+		k.queue.Forget(obj)
+		break
+	case k.queue.NumRequeues(obj) >= MaxRetries:
+		logger.WithError(err).Error("Max retries exceeded")
+		k.queue.Forget(obj)
+		break
+	default:
+		logger.WithError(err).Error("Failed to update, retrying")
+		k.queue.AddRateLimited(obj)
+		break
+	}
+	return true
+}
+
+// Decode reads the yaml descriptor for a pod
+func (k *KubeAPI) Decode(template string) (*PodDescriptor, error) {
+	decoder := scheme.Codecs.UniversalDeserializer()
+	obj, _, err := decoder.Decode([]byte(template), nil, nil)
 	if err != nil {
 		return nil, err
 	}
-	events := make(chan PodInfo, 16)
-	go func() {
-		defer close(events)
-		logger := k.Logger.WithField("name", name)
-		k.forwardEvents(ctx, logger, name, stream, events)
-	}()
-	return events, nil
-}
-
-// forwardEvents forwards events from watch to events chan.
-// exhaust the event channel to make sure the thread is done.
-// Will not close the events channel.
-func (k *KubeAPI) forwardEvents(ctx context.Context, logger *log.Entry, name string, stream watch.Interface, events chan<- PodInfo) {
-	defer func() {
-		// Make sure the stream is closed and exhausted, to release the suscription
-		stream.Stop()
-		for range stream.ResultChan() {
-		}
-	}()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event, ok := <-stream.ResultChan():
-			if !ok {
-				// No more events to stream, return
-				logger.Info("Watch input stream closed")
-				return
-			}
-			pod, err := k.castPod(event.Object)
-			if err != nil {
-				logger.WithField("type", event.Type).WithError(err).Error("Failed to cast event as pod")
-				continue
-			}
-			events <- PodInfo{
-				Type:    EventType(event.Type),
-				Phase:   PodPhase(pod.Status.Phase),
-				Address: pod.Status.PodIP,
-			}
-		}
+	pod, ok := obj.(*v1.Pod)
+	if !ok {
+		return nil, PodKindError("Failed to decode template to pod")
 	}
+	return pod, nil
 }
 
 // DeletePod destroys pod by name
@@ -203,20 +296,6 @@ func (k *KubeAPI) DeletePod(ctx context.Context, name string) error {
 	return err
 }
 
-// Decode reads the yaml descriptor for a pod
-func (k *KubeAPI) Decode(template string) (*PodDescriptor, error) {
-	decoder := scheme.Codecs.UniversalDeserializer()
-	obj, _, err := decoder.Decode([]byte(template), nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	pod, err := k.castPod(obj)
-	if err != nil {
-		return nil, err
-	}
-	return pod, nil
-}
-
 // CreatePod with given PodDescriptor
 func (k *KubeAPI) CreatePod(ctx context.Context, desc *PodDescriptor) error {
 	pod, err := k.client.CoreV1().Pods(k.Namespace).Create(ctx, desc, metav1.CreateOptions{})
@@ -227,17 +306,4 @@ func (k *KubeAPI) CreatePod(ctx context.Context, desc *PodDescriptor) error {
 		log.WithField("name", pod.Name).Info("Pod already exists, skipping")
 	}
 	return nil
-}
-
-// cast generic runtimeObject to Pod
-func (k *KubeAPI) castPod(obj runtime.Object) (*v1.Pod, error) {
-	gvk := obj.GetObjectKind().GroupVersionKind()
-	if gvk.Kind != "" && gvk.Kind != "Pod" {
-		return nil, PodKindError(fmt.Sprintf("Object kind is not pod but %s", gvk.Kind))
-	}
-	pod, ok := obj.(*v1.Pod)
-	if !ok {
-		return nil, PodKindError(fmt.Sprintf("Could not cast kind %s to v1.Pod struct", gvk.Kind))
-	}
-	return pod, nil
 }
