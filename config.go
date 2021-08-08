@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"regexp"
 	"strconv"
 )
 
@@ -16,6 +17,8 @@ const (
 	POD_LIFETIME_MINUTE      = 120
 	SESSION_LIFETIME_MINUTE  = 60
 	GRACEFUL_SHUTDOWN_SECOND = 30
+	KEYPROXY_LABEL_NAME      = "keyproxy/release"
+	KEYPROXY_LABEL_VALUE     = "undefined"
 )
 
 type Config struct {
@@ -34,6 +37,7 @@ type Config struct {
 	SessionLifetime  int
 	GracefulShutdown int
 	Threads          int
+	Labels           map[string]string
 }
 
 func GetConfig() *Config {
@@ -47,6 +51,8 @@ func GetConfig() *Config {
 	flag.StringVar(&config.ProxyScheme, "proxyscheme", LookupEnvOrString("KEYPROXY_PROXYSCHEME", ""), "Scheme (http/https) to use for redirects to the login page (defaults to forwardedProto or https)")
 	flag.StringVar(&config.AppScheme, "appscheme", LookupEnvOrString("KEYPROXY_APPSCHEME", ""), "Scheme (http/https) to use for redirects to the app pages (defaults to forwardedProto or https)")
 	flag.StringVar(&config.ForwardedProto, "forwardedproto", LookupEnvOrString("KEYPROXY_FORWARDEDPROTO", FORWARDEDPROTO), "Value for X-Forwarded-Proto header")
+	var label string
+	flag.StringVar(&label, "keyproxy", LookupEnvOrString("KEYPROXY_LABEL", KEYPROXY_LABEL_VALUE), "Value for 'keyproxy/release' label")
 	flag.IntVar(&config.Port, "port", LookupEnvOrInt("KEYPROXY_PORT", 8080), "TCP listen port")
 	flag.IntVar(&config.PodPort, "podport", LookupEnvOrInt("KEYPROXY_PODPORT", PODPORT), "Port the backend pod listens to")
 	flag.IntVar(&config.PodLifetime, "podlifetime", LookupEnvOrInt("KEYPROXY_PODLIFETIME", 120), "Pod Lifetime (minutes)")
@@ -97,6 +103,15 @@ func GetConfig() *Config {
 	if config.Threads <= 0 || config.Threads > 1000 {
 		panic("Threads must be between 1 and 1000")
 	}
+	if len(label) < 4 || len(label) > 32 {
+		panic("Label must be between 4 and 32 characters")
+	}
+	validLabel := regexp.MustCompile("^[a-zA-Z0-9\\-]+$")
+	if !validLabel.Match([]byte(label)) {
+		panic("Label must be include only alphanumeric characters and '-'")
+	}
+	config.Labels = make(map[string]string)
+	config.Labels[KEYPROXY_LABEL_NAME] = label
 	return config
 }
 

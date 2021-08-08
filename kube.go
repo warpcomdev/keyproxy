@@ -70,6 +70,7 @@ type PodInfo struct {
 	Type    EventType
 	Phase   PodPhase
 	Address string
+	Ready   bool
 }
 
 // EventHandler manages events
@@ -99,7 +100,7 @@ type KubeAPI struct {
 }
 
 // NewAPI tries to build API by autodiscovering cluster and namespace
-func NewLoop(logger *log.Logger, namespace string, handler EventHandler, threads int) (*KubeAPI, error) {
+func NewLoop(logger *log.Logger, namespace string, handler EventHandler, threads int, labels map[string]string) (*KubeAPI, error) {
 	k := &KubeAPI{
 		Logger:         logger,
 		KubeconfigPath: filepath.Join(homedir.HomeDir(), ".kube", "config"),
@@ -125,8 +126,14 @@ func NewLoop(logger *log.Logger, namespace string, handler EventHandler, threads
 		namespace = k.namespace()
 	}
 	k.Namespace = namespace
-	// Build informer. TODO: Improve filtering
-	informerFactory := informers.NewSharedInformerFactoryWithOptions(clientset, time.Minute*30, informers.WithNamespace(k.Namespace))
+	// Build informer, filtering pods by provided labels
+	selectorLabels := func(lo *metav1.ListOptions) {
+		lo.LabelSelector = metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: labels})
+	}
+	informerFactory := informers.NewSharedInformerFactoryWithOptions(clientset,
+		time.Minute*30,
+		informers.WithTweakListOptions(selectorLabels),
+		informers.WithNamespace(k.Namespace))
 	k.podInformer = informerFactory.Core().V1().Pods()
 	// Start informerFactory and wait for sync
 	logger.Info("Starting informer factory and waiting for cache sync")
@@ -187,11 +194,21 @@ func (k *KubeAPI) PodStatus(name string) (PodInfo, error) {
 	pod, err := k.podInformer.Lister().Pods(k.Namespace).Get(name)
 	if err != nil {
 		if kerrors.IsNotFound(err) {
-			return PodInfo{Name: name, Type: Deleted, Phase: PodUnknown}, nil
+			return PodInfo{Name: name, Type: Deleted, Phase: PodUnknown, Ready: false}, nil
 		}
-		return PodInfo{Name: name, Type: Error, Phase: PodUnknown}, err
+		return PodInfo{Name: name, Type: Error, Phase: PodUnknown, Ready: false}, err
 	}
-	return PodInfo{Name: name, Type: Modified, Phase: PodPhase(pod.Status.Phase), Address: pod.Status.PodIP}, nil
+	ready := false
+	if pod.Status.ContainerStatuses != nil {
+		ready = true
+		for _, status := range pod.Status.ContainerStatuses {
+			if !status.Ready {
+				ready = false
+				break
+			}
+		}
+	}
+	return PodInfo{Name: name, Type: Modified, Phase: PodPhase(pod.Status.Phase), Address: pod.Status.PodIP, Ready: ready}, nil
 }
 
 // Enqueue informer events to work queue

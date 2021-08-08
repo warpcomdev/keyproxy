@@ -167,6 +167,7 @@ type TemplateParams struct {
 	Username    string
 	EventType   EventType
 	PodPhase    PodPhase
+	Ready       bool
 	Address     string
 }
 
@@ -425,6 +426,7 @@ func (h *ProxyHandler) NewParams(r *http.Request, session Session, create bool) 
 		EventType:   info.Type,
 		PodPhase:    info.Phase,
 		Address:     info.Address,
+		Ready:       info.Ready,
 	}
 	return params, nil
 }

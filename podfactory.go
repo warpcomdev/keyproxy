@@ -11,7 +11,9 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const BUFFER_POOL_SIZE = 32 * 1024 // Same as default pool size for httputil.ReverseProxy
+const (
+	BUFFER_POOL_SIZE = 32 * 1024 // Same as default pool size for httputil.ReverseProxy
+)
 
 var ErrorFactoryCancelled = errors.New("PodFactory is being cancelled")
 
@@ -27,10 +29,11 @@ type PodFactory struct {
 	BufferPool     sync.Pool
 	managers       map[Credentials]*PodManager
 	managersByKey  map[string]*PodManager
+	Labels         map[string]string
 }
 
 // NewFactory creates a Factory for PodManagers
-func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Duration, scheme string, port int, forwardedProto string) *PodFactory {
+func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Duration, scheme string, port int, forwardedProto string, labels map[string]string) *PodFactory {
 	factory := &PodFactory{
 		Logger:         logger,
 		Template:       tmpl,
@@ -45,6 +48,7 @@ func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Durat
 		},
 		managers:      make(map[Credentials]*PodManager),
 		managersByKey: make(map[string]*PodManager),
+		Labels:        labels,
 	}
 	// Keep track of time
 	factory.Tick(time.Second)
@@ -95,6 +99,15 @@ func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, e
 	if err != nil {
 		return nil, err
 	}
+	// Add keyproxy label for better filtering
+	labels := pod.ObjectMeta.Labels
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	for k, v := range f.Labels {
+		labels[k] = v
+	}
+	pod.ObjectMeta.Labels = labels
 	manager := &PodManager{
 		Logger:         f.Logger,
 		Descriptor:     pod,

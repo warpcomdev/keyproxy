@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Pod
 metadata:
   labels:
-    app: wsosi-tooling
+    app: wso2si-tooling
     service: {{ .Service | quote }}
     username: {{ .Username | quote }}
   name: "wso2tooling-{{ .Service | replace "_" "-" }}-{{ .Username | replace "_" "-" }}"
@@ -15,6 +15,14 @@ spec:
     ports:
     - name: http
       containerPort: 9390
+    readinessProbe:
+      httpGet:
+        path: /editor
+        port: 9390
+      initialDelaySeconds: 30
+      timeoutSeconds: 5
+      periodSeconds: 30
+      successThreshold: 1
     resources:
       limits:
         cpu: 350m

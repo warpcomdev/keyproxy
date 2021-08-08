@@ -63,11 +63,11 @@ func main() {
 	}
 
 	logger.WithFields(log.Fields{"port": config.PodPort}).Info("Building pod factory")
-	factory := NewFactory(logger, tmpl, time.Duration(config.PodLifetime)*time.Minute, "http", config.PodPort, config.ForwardedProto)
+	factory := NewFactory(logger, tmpl, time.Duration(config.PodLifetime)*time.Minute, "http", config.PodPort, config.ForwardedProto, config.Labels)
 	defer factory.Cancel()
 
 	logger.WithFields(log.Fields{"namespace": config.Namespace}).Info("Connecting to kubernetes API")
-	api, err := NewLoop(logger, config.Namespace, factory, config.Threads)
+	api, err := NewLoop(logger, config.Namespace, factory, config.Threads, config.Labels)
 	if err != nil {
 		panic(err)
 	}
