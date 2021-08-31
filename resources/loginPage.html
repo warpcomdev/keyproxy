@@ -14,7 +14,7 @@
                     <tr><th>Service:</th><td><input type="text" name="service" id="service" value="{{ .Service }}"/></td></tr>
                     <tr><td colspan="2"><input type="submit" name="submit" id="submit" value="Submit"/></td></tr>
                 </table>
-                <input type="hidden" name="csrftoken" id="csrftoken" value="{{ .CSRFToken }}"/>
+                {{ .csrfField }}
             </form>
         </div>
         {{ with .Message }}

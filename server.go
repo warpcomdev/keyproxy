@@ -1,13 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"errors"
 	"fmt"
 	htmlTemplate "html/template"
 	"io/fs"
@@ -15,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gorilla/csrf"
 	"github.com/masterminds/sprig"
 	log "github.com/sirupsen/logrus"
 
@@ -92,12 +88,16 @@ func NewServer(logger *log.Logger, redirect, proxyscheme, appscheme string, reso
 		Auth:          auth,
 		Factory:       factory,
 		templateGroup: templateGroup,
-		csrfSecret:    make([]byte, 64),
+		csrfSecret:    make([]byte, 32),
 		ServeMux:      http.NewServeMux(),
+	}
+	options := []csrf.Option{
+		csrf.CookieName(CSRFCOOKIE),
+		csrf.SameSite(csrf.SameSiteStrictMode),
 	}
 	rand.Read(handler.csrfSecret)
 	handler.Handle(RESOURCEPATH, http.StripPrefix(RESOURCEPATH, http.FileServer(http.FS(resources))))
-	handler.Handle(LOGINPATH, Middleware(handler.login).Methods(http.MethodGet, http.MethodPost).Exhaust())
+	handler.Handle(LOGINPATH, Middleware(handler.login).CSRF(handler.csrfSecret, options...).Methods(http.MethodGet, http.MethodPost).Exhaust())
 	handler.Handle(LOGOUTPATH, Middleware(handler.logout).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
 	handler.Handle(HEALTHZPATH, Middleware(handler.healthz).Methods(http.MethodGet).Exhaust())
 	handler.Handle(INFOPATH, Middleware(handler.infoPage).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
@@ -155,7 +155,7 @@ type LoginParams struct {
 	Service     string
 	Username    string
 	Message     string
-	CSRFToken   string
+	CSRFTag     htmlTemplate.HTML
 }
 
 // TemplateParams passed to all other template pages
@@ -173,22 +173,6 @@ type TemplateParams struct {
 
 // loginPage renders the login page template
 func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred Credentials, msg string) {
-	// Create CSRF token
-	buffer := make([]byte, 64)
-	rand.Read(buffer)
-	csrfToken := base64.StdEncoding.EncodeToString(buffer)
-	// Sign CSRF token
-	mac := hmac.New(sha256.New, h.csrfSecret)
-	mac.Write(buffer)
-	cookieToken := base64.StdEncoding.EncodeToString(mac.Sum(nil))
-	// Save signature as cookie
-	http.SetCookie(w, &http.Cookie{
-		Name:     CSRFCOOKIE,
-		Value:    cookieToken,
-		Expires:  time.Now().Add(15 * time.Minute),
-		Path:     "/",
-		HttpOnly: true,
-	})
 	params := LoginParams{
 		ProxyScheme: h.ProxyScheme,
 		AppScheme:   h.AppScheme,
@@ -196,7 +180,7 @@ func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred Cr
 		Service:     cred.Service,
 		Username:    cred.Username,
 		Message:     msg,
-		CSRFToken:   csrfToken,
+		CSRFTag:     csrf.TemplateField(r),
 	}
 	if err := h.templateGroup.ExecuteTemplate(w, LoginTemplate, params); err != nil {
 		h.Logger.WithError(err).Error("Failed to render login template")
@@ -206,50 +190,23 @@ func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred Cr
 // LoginForm processes the login form and sets a cookie
 func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 
-	// Get credentials
-	if err := r.ParseForm(); err != nil {
+	// Get credentials. Form already parsed by CSRF
+	/*if err := r.ParseForm(); err != nil {
 		http.Error(w, "Failed to parse form data", http.StatusBadRequest)
 		return
-	}
+	}*/
 	cred := Credentials{
 		Service:  strings.TrimSpace(r.Form.Get("service")),
 		Username: strings.TrimSpace(r.Form.Get("username")),
 	}
 	pass := strings.TrimSpace(r.Form.Get("password"))
-	token := strings.TrimSpace(r.Form.Get("csrftoken"))
 
 	// Check if parameters are empty
-	if cred.Service == "" || cred.Username == "" || pass == "" || token == "" {
-		h.loginPage(w, r, cred, "Empty service name, user, password or token")
+	if cred.Service == "" || cred.Username == "" || pass == "" {
+		h.loginPage(w, r, cred, "Empty service name, user or password")
 		return
 	}
 	logger := h.Logger.WithFields(log.Fields{"service": cred.Service, "username": cred.Username})
-
-	csrfCookie, err := r.Cookie(CSRFCOOKIE)
-	if err != nil && errors.Is(err, http.ErrNoCookie) {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		csrfCookie = nil
-	}
-	if csrfCookie == nil {
-		h.loginPage(w, r, cred, "Error while matching request")
-		return
-	}
-
-	buffer, err := base64.StdEncoding.DecodeString(token)
-	if err != nil {
-		h.loginPage(w, r, cred, err.Error())
-		return
-	}
-	signature, err := base64.StdEncoding.DecodeString(csrfCookie.Value)
-	if err != nil {
-		h.loginPage(w, r, cred, err.Error())
-		return
-	}
-	mac := hmac.New(sha256.New, h.csrfSecret)
-	mac.Write(buffer)
-	if bytes.Compare(signature, mac.Sum(nil)) != 0 {
-		h.loginPage(w, r, cred, "Error while matching tokens")
-	}
 
 	// Get session and check parameters
 	session, err := h.Auth.Login(cred, pass)

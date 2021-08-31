@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/http"
 
+	"github.com/gorilla/csrf"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -20,6 +21,13 @@ func Middleware(handlerFunc func(w http.ResponseWriter, r *http.Request)) *middl
 	return &middleware{
 		Handler: http.HandlerFunc(handlerFunc),
 	}
+}
+
+// CSRF uses gorilla.csrf to CSRF protect paths
+func (m *middleware) CSRF(csrfSecret []byte, options ...csrf.Option) *middleware {
+	handler := m.Handler
+	m.Handler = csrf.Protect(csrfSecret, options...)(handler)
+	return m
 }
 
 // Auth checks authentication and stores session in context.
