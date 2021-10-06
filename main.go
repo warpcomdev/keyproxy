@@ -19,6 +19,10 @@ import (
 	"github.com/golang-jwt/jwt"
 	"github.com/masterminds/sprig"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/warpcomdev/keyproxy/internal/auth"
+	"github.com/warpcomdev/keyproxy/internal/kube"
+	"github.com/warpcomdev/keyproxy/internal/server"
 )
 
 //go:embed podstatic/*
@@ -66,11 +70,11 @@ func main() {
 	}
 
 	logger.WithFields(log.Fields{"port": config.PodPort}).Info("Building pod factory")
-	factory := NewFactory(logger, tmpl, time.Duration(config.PodLifetime)*time.Minute, "http", config.PodPort, config.ForwardedProto, config.Labels)
+	factory := kube.NewFactory(logger, tmpl, time.Duration(config.PodLifetime)*time.Minute, "http", config.PodPort, config.ForwardedProto, server.SESSIONCOOKIE, config.Labels)
 	defer factory.Cancel()
 
 	logger.WithFields(log.Fields{"namespace": config.Namespace}).Info("Connecting to kubernetes API")
-	api, err := NewLoop(logger, config.Namespace, factory, config.Threads, config.Labels)
+	api, err := kube.Loop(logger, config.Namespace, factory, config.Threads, config.Labels)
 	if err != nil {
 		panic(err)
 	}
@@ -87,11 +91,11 @@ func main() {
 		signingKey = make([]byte, 64)
 		rand.Read(signingKey)
 	}
-	auth := NewAuth(logger, time.Duration(config.SessionLifetime)*time.Minute, config.KeystoneURL, jwt.SigningMethodHS256, jwt.Keyfunc(func(*jwt.Token) (interface{}, error) { return signingKey, nil }))
+	auth := auth.New(logger, time.Duration(config.SessionLifetime)*time.Minute, config.KeystoneURL, jwt.SigningMethodHS256, jwt.Keyfunc(func(*jwt.Token) (interface{}, error) { return signingKey, nil }))
 	defer auth.Cancel()
 
 	logger.WithFields(log.Fields{"proxyscheme": config.ProxyScheme, "appscheme": config.AppScheme, "resources": config.StaticFolder}).Info("Building proxy server")
-	proxy, err := NewServer(logger, config.Redirect, config.ProxyScheme, config.AppScheme,
+	proxy, err := server.New(logger, config.Redirect, config.ProxyScheme, config.AppScheme,
 		localResources(logger, config.TemplateFolder, templates, "templates"),
 		localResources(logger, config.StaticFolder, podstatic, "podstatic"),
 		api, auth, factory)

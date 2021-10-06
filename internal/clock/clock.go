@@ -1,4 +1,4 @@
-package main
+package clock
 
 import (
 	"context"
@@ -47,41 +47,41 @@ func (t *AtomicTimestamp) Remaining(lifetime time.Duration) time.Duration {
 	return time.Duration(timestamp+UnixTimestamp(lifetime/time.Second)-now) * time.Second
 }
 
-// TimeKeeper base struct for objects that need a cancellable ticker thread
-type TimeKeeper struct {
+// Keeper base struct for objects that need a cancellable ticker thread
+type Keeper struct {
 	// Must be the first field in every embedding struct
 	timestamp  AtomicTimestamp
-	cancelCtx  context.Context
-	cancelFunc context.CancelFunc
+	CancelCtx  context.Context
+	CancelFunc context.CancelFunc
 	Mutex      sync.Mutex
 	Group      sync.WaitGroup
 }
 
 // Tick starts updating timestamp each time.Duration interval
-func (t *TimeKeeper) Tick(step time.Duration) {
-	t.cancelCtx, t.cancelFunc = context.WithCancel(context.Background())
+func (t *Keeper) Tick(step time.Duration) {
+	t.CancelCtx, t.CancelFunc = context.WithCancel(context.Background())
 	t.Group.Add(1)
 	go func() {
 		defer t.Group.Done()
-		t.timestamp.Tick(t.cancelCtx, step)
+		t.timestamp.Tick(t.CancelCtx, step)
 	}()
 }
 
 // Clock returns the current timestamp value
-func (t *TimeKeeper) Clock() UnixTimestamp {
+func (t *Keeper) Clock() UnixTimestamp {
 	return t.timestamp.Load()
 }
 
 // Cancel the ticker and wait the group
-func (t *TimeKeeper) Cancel() {
+func (t *Keeper) Cancel() {
 	var cancelFunc context.CancelFunc
 	t.Mutex.Lock()
-	if t.cancelFunc == nil {
+	if t.CancelFunc == nil {
 		t.Mutex.Unlock()
 		return
 	}
-	cancelFunc = t.cancelFunc
-	t.cancelFunc = nil
+	cancelFunc = t.CancelFunc
+	t.CancelFunc = nil
 	t.Mutex.Unlock()
 	cancelFunc()
 	t.Group.Wait()

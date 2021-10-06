@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -13,6 +13,9 @@ import (
 	"github.com/gorilla/csrf"
 	"github.com/masterminds/sprig"
 	log "github.com/sirupsen/logrus"
+	"github.com/warpcomdev/keyproxy/internal/auth"
+	"github.com/warpcomdev/keyproxy/internal/clock"
+	"github.com/warpcomdev/keyproxy/internal/kube"
 
 	// Bring profiling interface in
 	_ "net/http/pprof"
@@ -50,33 +53,33 @@ const CSRFHEADER = "X-CSRF-Token"
 // AuthSessionKeyType used for storing session in request context.
 type SessionKeyType int
 type Session struct {
-	Credentials Credentials
-	AuthSession *AuthSession
-	Manager     *PodManager
+	Credentials auth.Credentials
+	AuthSession *auth.Session
+	Manager     *kube.Manager
 	Logger      *log.Entry
 }
 
 // ProxyHandler manages the pod lifecycle requests and proxies other requests.
 type ProxyHandler struct {
 	// lastHealth must be first because it is atomic
-	lastHealth AtomicTimestamp
-	TimeKeeper
+	lastHealth clock.AtomicTimestamp
+	clock.Keeper
 	Logger        *log.Logger
 	Redirect      string // Where to redirect requests for "/"
 	ProxyScheme   string // scheme for the login page, "http" or "https"
 	AppScheme     string // scheme for the app, "http" or "https"
 	Static        fs.FS
 	StaticLogin   bool // true if there is an 'index.html' in podstatic
-	Api           *KubeAPI
-	Auth          *AuthManager
-	Factory       *PodFactory
+	Api           *kube.API
+	Auth          *auth.Manager
+	Factory       *kube.Factory
 	csrfSecret    []byte
 	templateGroup *htmlTemplate.Template
 	*http.ServeMux
 }
 
-// NewServer creates new proxy handler
-func NewServer(logger *log.Logger, redirect, proxyscheme, appscheme string, templates, static fs.FS, api *KubeAPI, auth *AuthManager, factory *PodFactory) (*ProxyHandler, error) {
+// New creates new proxy handler
+func New(logger *log.Logger, redirect, proxyscheme, appscheme string, templates, static fs.FS, api *kube.API, authManager *auth.Manager, factory *kube.Factory) (*ProxyHandler, error) {
 	templateGroup, err := htmlTemplate.New(SpawnTemplate).Funcs(sprig.FuncMap()).ParseFS(templates, "*.html")
 	if err != nil {
 		logger.WithError(err).Error("Failed to load templates")
@@ -96,7 +99,7 @@ func NewServer(logger *log.Logger, redirect, proxyscheme, appscheme string, temp
 		ProxyScheme:   proxyscheme,
 		AppScheme:     appscheme,
 		Api:           api,
-		Auth:          auth,
+		Auth:          authManager,
 		Factory:       factory,
 		templateGroup: templateGroup,
 		csrfSecret:    make([]byte, 32),
@@ -156,7 +159,7 @@ func (h *ProxyHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logger.Debug("Triggering login GET path")
-	h.loginPage(w, r, Credentials{}, "")
+	h.loginPage(w, r, auth.Credentials{}, "")
 }
 
 // LoginParams passed to login page template
@@ -172,19 +175,19 @@ type LoginParams struct {
 
 // TemplateParams passed to all other template pages
 type TemplateParams struct {
-	ProxyScheme string    `json:"proxyScheme"`
-	AppScheme   string    `json:"appScheme"`
-	Host        string    `json:"host"`
-	Service     string    `json:"service"`
-	Username    string    `json:"username"`
-	EventType   EventType `json:"event_type"`
-	PodPhase    PodPhase  `json:"pod_phase"`
-	Ready       bool      `json:"ready"`
-	Address     string    `json:"address"`
+	ProxyScheme string         `json:"proxyScheme"`
+	AppScheme   string         `json:"appScheme"`
+	Host        string         `json:"host"`
+	Service     string         `json:"service"`
+	Username    string         `json:"username"`
+	EventType   kube.EventType `json:"event_type"`
+	PodPhase    kube.PodPhase  `json:"pod_phase"`
+	Ready       bool           `json:"ready"`
+	Address     string         `json:"address"`
 }
 
 // loginPage renders the login page template
-func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred Credentials, msg string) {
+func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred auth.Credentials, msg string) {
 	params := LoginParams{
 		ProxyScheme: h.ProxyScheme,
 		AppScheme:   h.AppScheme,
@@ -212,7 +215,7 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to parse form data", http.StatusBadRequest)
 		return
 	}*/
-	cred := Credentials{
+	cred := auth.Credentials{
 		Service:  strings.TrimSpace(r.Form.Get("service")),
 		Username: strings.TrimSpace(r.Form.Get("username")),
 	}
@@ -314,7 +317,7 @@ func (h *ProxyHandler) healthz(w http.ResponseWriter, r *http.Request) {
 	}
 	h.lastHealth.Store(timestamp)
 	// Check kubernetes connection
-	version, err := h.Api.client.ServerVersion()
+	version, err := h.Api.ServerVersion()
 	if err != nil {
 		h.Logger.WithError(err).Error("Failed health check")
 		http.Error(w, "Failed health check", http.StatusInternalServerError)
@@ -340,7 +343,7 @@ func (h *ProxyHandler) infoPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	template := WaitTemplate
-	if params.EventType == Deleted || params.PodPhase == PodFailed || params.PodPhase == PodSucceeded || params.PodPhase == PodUnknown {
+	if params.EventType == kube.Deleted || params.PodPhase == kube.PodFailed || params.PodPhase == kube.PodSucceeded || params.PodPhase == kube.PodUnknown {
 		template = ErrorTemplate
 	}
 	h.render(session.Logger, w, r, template, params)

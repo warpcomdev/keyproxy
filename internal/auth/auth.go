@@ -1,4 +1,4 @@
-package main
+package auth
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/golang-jwt/jwt"
 	log "github.com/sirupsen/logrus"
+	"github.com/warpcomdev/keyproxy/internal/clock"
 )
 
 const (
@@ -36,17 +37,17 @@ func (cred Credentials) Hash(password string) uint32 {
 	return h.Sum32()
 }
 
-// AuthSession keeps authentication session status
-type AuthSession struct {
+// Session keeps authentication session status
+type Session struct {
 	// accessTime, Token and Expiration are used for session refresh
-	accessTime AtomicTimestamp
+	accessTime clock.AtomicTimestamp
 	token      string
 	expiration time.Time
 	// hash is used for rate limiting
 	hash uint32
 	// logout is used for delayed logout.
-	// It is protected by the AuthManager lock, not the AuthSession log.
-	// i.e. AuthSession never uses it. Only AuthManager uses it,
+	// It is protected by the Manager lock, not the Session log.
+	// i.e. Session never uses it. Only Manager uses it,
 	// and it is always used without the mutex below.
 	logout bool
 	// JWT is used for Auth, and protected by mutex.
@@ -58,7 +59,7 @@ type AuthSession struct {
 // Update JWT Token based on credentials and time.
 // The updated JWT token might be empty (""), even if
 // The JWT Error is nil too.
-func (s *AuthSession) updateJWT(cred Credentials, token string, expiration time.Time, method jwt.SigningMethod, keyFunc jwt.Keyfunc) error {
+func (s *Session) updateJWT(cred Credentials, token string, expiration time.Time, method jwt.SigningMethod, keyFunc jwt.Keyfunc) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.expiration = expiration
@@ -87,16 +88,16 @@ func (s *AuthSession) updateJWT(cred Credentials, token string, expiration time.
 }
 
 // JWT returns the signedJWT along with an expiration time for cookies
-func (s *AuthSession) JWT() (string, time.Time, error) {
+func (s *Session) JWT() (string, time.Time, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	return s.jwtToken, s.expiration, s.jwtError
 }
 
-// AuthManager handles credential resolution, ratelimit and cache
-type AuthManager struct {
-	// TimeKeeper must be at the top of the struct
-	TimeKeeper
+// Manager handles credential resolution, ratelimit and cache
+type Manager struct {
+	// Keeper must be at the top of the struct
+	clock.Keeper
 	Logger   *log.Logger
 	Lifetime time.Duration
 	Keystone Keystone
@@ -104,27 +105,27 @@ type AuthManager struct {
 	SigningMethod jwt.SigningMethod
 	KeyFunc       jwt.Keyfunc
 	// Session cache. Keeps refreshing tokens.
-	cache     map[Credentials]*AuthSession
-	loginHash []UnixTimestamp
+	cache     map[Credentials]*Session
+	loginHash []clock.UnixTimestamp
 }
 
-// NewAuth creates new Auth Manager
-func NewAuth(logger *log.Logger, lifetime time.Duration, keystoneURL string, signingMethod jwt.SigningMethod, keyFunc jwt.Keyfunc) *AuthManager {
-	manager := &AuthManager{
+// New creates new Auth Manager
+func New(logger *log.Logger, lifetime time.Duration, keystoneURL string, signingMethod jwt.SigningMethod, keyFunc jwt.Keyfunc) *Manager {
+	manager := &Manager{
 		Logger:        logger,
 		Lifetime:      lifetime,
 		Keystone:      Keystone{URL: fmt.Sprintf("%s/v3/auth/tokens", keystoneURL)},
 		SigningMethod: signingMethod,
 		KeyFunc:       keyFunc,
-		cache:         make(map[Credentials]*AuthSession),
-		loginHash:     make([]UnixTimestamp, 1<<LOGIN_HASH_BITS),
+		cache:         make(map[Credentials]*Session),
+		loginHash:     make([]clock.UnixTimestamp, 1<<LOGIN_HASH_BITS),
 	}
 	manager.Tick(time.Second)
 	return manager
 }
 
 // Check the credential cache for a match that has not expired yet.
-func (m *AuthManager) Check(webToken string) (Credentials, *AuthSession, error) {
+func (m *Manager) Check(webToken string) (Credentials, *Session, error) {
 	var claims jwt.StandardClaims
 	jwtToken, err := jwt.ParseWithClaims(webToken, &claims, m.KeyFunc)
 	if err != nil {
@@ -148,7 +149,7 @@ func (m *AuthManager) Check(webToken string) (Credentials, *AuthSession, error) 
 }
 
 // Login with credentials and password.
-func (m *AuthManager) Login(cred Credentials, password string) (*AuthSession, error) {
+func (m *Manager) Login(cred Credentials, password string) (*Session, error) {
 	// Rate-limit based on buckets
 	credHash := cred.Hash(password)
 	bitMask := credHash & ((1 << LOGIN_HASH_BITS) - 1)
@@ -174,7 +175,7 @@ func (m *AuthManager) Login(cred Credentials, password string) (*AuthSession, er
 	if existing {
 		session.logout = false
 	} else {
-		session = &AuthSession{
+		session = &Session{
 			token:      token,
 			expiration: exp,
 			hash:       credHash,
@@ -185,7 +186,7 @@ func (m *AuthManager) Login(cred Credentials, password string) (*AuthSession, er
 		m.Group.Add(1)
 		go func() {
 			defer m.Group.Done()
-			m.Watch(m.cancelCtx, cred, session)
+			m.Watch(m.CancelCtx, cred, session)
 		}()
 	}
 	m.Mutex.Unlock()
@@ -194,13 +195,15 @@ func (m *AuthManager) Login(cred Credentials, password string) (*AuthSession, er
 	return session, nil
 }
 
-func (m *AuthManager) Logout(session *AuthSession) {
+// Logout session
+func (m *Manager) Logout(session *Session) {
 	m.Mutex.Lock()
 	session.logout = true
 	m.Mutex.Unlock()
 }
 
-func (m *AuthManager) Watch(ctx context.Context, cred Credentials, session *AuthSession) {
+// Watch a session, expire it when the user leaves
+func (m *Manager) Watch(ctx context.Context, cred Credentials, session *Session) {
 	// When the watch is done, remove the session from cache
 	defer func() {
 		m.Mutex.Lock()
