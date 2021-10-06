@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/csrf"
 	log "github.com/sirupsen/logrus"
@@ -14,6 +16,26 @@ import (
 
 type middleware struct {
 	http.Handler
+}
+
+// IsAPICall returns true if request Accepts 'application/json'
+func isApiCall(r *http.Request) bool {
+	for _, accept := range r.Header.Values("Accept") {
+		if strings.HasPrefix(accept, "application/json") {
+			return true
+		}
+	}
+	return false
+}
+
+// apiReply serializes an API reply
+func apiReply(logger *log.Entry, w http.ResponseWriter, data interface{}) {
+	encoder := json.NewEncoder(w)
+	w.Header().Add(http.CanonicalHeaderKey("Content-Type"), "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := encoder.Encode(data); err != nil {
+		logger.WithError(err).Error("Failed to serialize API response")
+	}
 }
 
 // Middleware constructor facilitates chaining middlewares
@@ -31,7 +53,7 @@ func (m *middleware) CSRF(csrfSecret []byte, options ...csrf.Option) *middleware
 }
 
 // Auth checks authentication and stores session in context.
-func (m *middleware) Auth(scheme string, cookieName string, check func(ctx context.Context, token string) (context.Context, error), redirectAlways bool) *middleware {
+func (m *middleware) Auth(scheme string, cookieName string, check func(ctx context.Context, token string) (context.Context, error), loginPath string, redirectAlways bool) *middleware {
 	handler := m.Handler
 	m.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
@@ -58,8 +80,8 @@ func (m *middleware) Auth(scheme string, cookieName string, check func(ctx conte
 
 		// Check if we could retrieve the context
 		if ctx == nil {
-			if redirectAlways || (r.URL.Path == "/" && r.Method == http.MethodGet) {
-				redirectPath := fmt.Sprintf("%s://%s%s", scheme, r.Host, LOGINPATH)
+			if !isApiCall(r) && (redirectAlways || (r.URL.Path == "/" && r.Method == http.MethodGet)) {
+				redirectPath := fmt.Sprintf("%s://%s%s", scheme, r.Host, loginPath)
 				http.Redirect(w, r, redirectPath, statusRedirect)
 			} else {
 				http.Error(w, "Invalid credentials", http.StatusUnauthorized)

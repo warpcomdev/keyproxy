@@ -44,6 +44,9 @@ const SESSIONCOOKIE = "KEYPROXY_SESSION"
 // CSRF Cookie name
 const CSRFCOOKIE = "KEYPROXY_CSRF"
 
+// CSRF Header Name
+const CSRFHEADER = "X-CSRF-Token"
+
 // AuthSessionKeyType used for storing session in request context.
 type SessionKeyType int
 type Session struct {
@@ -60,9 +63,10 @@ type ProxyHandler struct {
 	TimeKeeper
 	Logger        *log.Logger
 	Redirect      string // Where to redirect requests for "/"
-	ProxyScheme   string // // scheme for the login page, "http" or "https"
+	ProxyScheme   string // scheme for the login page, "http" or "https"
 	AppScheme     string // scheme for the app, "http" or "https"
 	Static        fs.FS
+	StaticLogin   bool // true if there is an 'index.html' in podstatic
 	Api           *KubeAPI
 	Auth          *AuthManager
 	Factory       *PodFactory
@@ -78,9 +82,16 @@ func NewServer(logger *log.Logger, redirect, proxyscheme, appscheme string, temp
 		logger.WithError(err).Error("Failed to load templates")
 		return nil, err
 	}
+	// If there is an "index.html" in static resources, use it
+	// for all processes
+	staticLogin, loginPath := false, LOGINPATH
+	if _, err := fs.Stat(static, "index.html"); err == nil {
+		staticLogin, loginPath = true, STATICPATH
+	}
 	handler := &ProxyHandler{
 		Logger:        logger,
 		Static:        static,
+		StaticLogin:   staticLogin,
 		Redirect:      redirect,
 		ProxyScheme:   proxyscheme,
 		AppScheme:     appscheme,
@@ -92,18 +103,19 @@ func NewServer(logger *log.Logger, redirect, proxyscheme, appscheme string, temp
 		ServeMux:      http.NewServeMux(),
 	}
 	options := []csrf.Option{
+		csrf.RequestHeader(CSRFHEADER),
 		csrf.CookieName(CSRFCOOKIE),
 		csrf.SameSite(csrf.SameSiteStrictMode),
 	}
 	rand.Read(handler.csrfSecret)
 	handler.Handle(STATICPATH, http.StripPrefix(STATICPATH, http.FileServer(http.FS(static))))
 	handler.Handle(LOGINPATH, Middleware(handler.login).CSRF(handler.csrfSecret, options...).Methods(http.MethodGet, http.MethodPost).Exhaust())
-	handler.Handle(LOGOUTPATH, Middleware(handler.logout).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(LOGOUTPATH, Middleware(handler.logout).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).Methods(http.MethodGet).Exhaust())
 	handler.Handle(HEALTHZPATH, Middleware(handler.healthz).Methods(http.MethodGet).Exhaust())
-	handler.Handle(INFOPATH, Middleware(handler.infoPage).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle(KILLPATH, Middleware(handler.killPage).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle(SPAWNPATH, Middleware(handler.spawnPage).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle("/", Middleware(handler.forward).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, false)) // do not exhaust, in case it upgrades to websocket
+	handler.Handle(INFOPATH, Middleware(handler.infoPage).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(KILLPATH, Middleware(handler.killPage).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle(SPAWNPATH, Middleware(handler.spawnPage).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).Methods(http.MethodGet).Exhaust())
+	handler.Handle("/", Middleware(handler.forward).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, false)) // do not exhaust, in case it upgrades to websocket
 	// Add support for pprof
 	handler.Handle("/debug/pprof", http.DefaultServeMux)
 	handler.Tick(time.Second)
@@ -182,6 +194,11 @@ func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred Cr
 		ErrMessage:  msg,
 		CSRFTag:     csrf.TemplateField(r),
 	}
+	// If this is an API call, return json
+	if isApiCall(r) {
+		apiReply(h.Logger.WithField("msg", msg), w, params)
+		return
+	}
 	if err := h.templateGroup.ExecuteTemplate(w, LoginTemplate, params); err != nil {
 		h.Logger.WithError(err).Error("Failed to render login template")
 	}
@@ -251,7 +268,20 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 	})
-	// Redirect with "SeeOther" to turn POST into GET
+
+	// If this is an API call, return json.
+	// Otherwise, redirect with "SeeOther" to turn POST into GET
+	if isApiCall(r) {
+		apiReply(logger, w, LoginParams{
+			ProxyScheme: h.ProxyScheme,
+			AppScheme:   h.AppScheme,
+			Host:        r.Host,
+			Service:     cred.Service,
+			Username:    cred.Username,
+		})
+		return
+	}
+
 	redirectURL := fmt.Sprintf("%s://%s", h.AppScheme, r.Host)
 	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
@@ -262,6 +292,14 @@ func (h *ProxyHandler) logout(w http.ResponseWriter, r *http.Request) {
 	session := r.Context().Value(SessionKeyType(0)).(Session)
 	h.Auth.Logout(session.AuthSession)
 	http.SetCookie(w, &http.Cookie{Name: SESSIONCOOKIE, Value: ""})
+	if isApiCall(r) {
+		apiReply(session.Logger, w, TemplateParams{
+			ProxyScheme: h.ProxyScheme,
+			AppScheme:   h.AppScheme,
+			Host:        r.Host,
+		})
+		return
+	}
 	http.Redirect(w, r, LOGINPATH, http.StatusTemporaryRedirect)
 }
 
@@ -297,6 +335,10 @@ func (h *ProxyHandler) infoPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if isApiCall(r) {
+		apiReply(session.Logger, w, params)
+		return
+	}
 	template := WaitTemplate
 	if params.EventType == Deleted || params.PodPhase == PodFailed || params.PodPhase == PodSucceeded || params.PodPhase == PodUnknown {
 		template = ErrorTemplate
@@ -319,6 +361,10 @@ func (h *ProxyHandler) killPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if isApiCall(r) {
+		apiReply(session.Logger, w, params)
+		return
+	}
 	h.render(session.Logger, w, r, KillTemplate, params)
 }
 
@@ -330,6 +376,10 @@ func (h *ProxyHandler) spawnPage(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		session.Logger.WithError(err).Error("Failed to spawn pod")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if isApiCall(r) {
+		apiReply(session.Logger, w, params)
 		return
 	}
 	h.render(session.Logger, w, r, SpawnTemplate, params)
@@ -353,7 +403,12 @@ func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request) {
 			Exhaust(r)
 			return
 		}
-		redirectURL := fmt.Sprintf("%s://%s%s", h.ProxyScheme, r.Host, INFOPATH)
+		var redirectURL string
+		if h.StaticLogin {
+			redirectURL = fmt.Sprintf("%s://%s%s", h.ProxyScheme, r.Host, STATICPATH)
+		} else {
+			redirectURL = fmt.Sprintf("%s://%s%s", h.ProxyScheme, r.Host, INFOPATH)
+		}
 		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 		Exhaust(r)
 		return
