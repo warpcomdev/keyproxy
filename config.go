@@ -27,7 +27,8 @@ type Config struct {
 	Redirect         string
 	AppScheme        string
 	ProxyScheme      string
-	ResourceFolder   string
+	StaticFolder     string
+	TemplateFolder   string
 	ForwardedProto   string
 	Port             int
 	PodPort          int
@@ -44,7 +45,8 @@ func GetConfig() *Config {
 	config := &Config{}
 	flag.StringVar(&config.KeystoneURL, "keystone", LookupEnvOrString("KEYPROXY_KEYSTONE", KEYSTONE), "Keystone URL")
 	flag.StringVar(&config.PodConfig, "podconfig", LookupEnvOrString("KEYPROXY_PODCONFIG", PODCONFIG), "Path to pod config file")
-	flag.StringVar(&config.ResourceFolder, "resources", LookupEnvOrString("KEYPROXY_RESOURCES", "resources"), "Path to static assets folder")
+	flag.StringVar(&config.StaticFolder, "static", LookupEnvOrString("KEYPROXY_STATIC", "podstatic"), "Path to static assets folder")
+	flag.StringVar(&config.TemplateFolder, "templates", LookupEnvOrString("KEYPROXY_TEMPLATES", "templates"), "Path to templates folder")
 	flag.StringVar(&config.Namespace, "namespace", LookupEnvOrString("KEYPROXY_NAMESPACE", ""), "Kubernetes namespace")
 	flag.StringVar(&config.SigningKey, "signingkey", LookupEnvOrString("KEYPROXY_SIGNINGKEY", ""), "Signing key for cookies")
 	flag.StringVar(&config.Redirect, "redirect", LookupEnvOrString("KEYPROXY_REDIRECT", REDIRECT), "Redirect requests for '/' to this path")
@@ -52,7 +54,7 @@ func GetConfig() *Config {
 	flag.StringVar(&config.AppScheme, "appscheme", LookupEnvOrString("KEYPROXY_APPSCHEME", ""), "Scheme (http/https) to use for redirects to the app pages (defaults to forwardedProto or https)")
 	flag.StringVar(&config.ForwardedProto, "forwardedproto", LookupEnvOrString("KEYPROXY_FORWARDEDPROTO", FORWARDEDPROTO), "Value for X-Forwarded-Proto header")
 	var label string
-	flag.StringVar(&label, "keyproxy", LookupEnvOrString("KEYPROXY_LABEL", KEYPROXY_LABEL_VALUE), "Value for 'keyproxy/release' label")
+	flag.StringVar(&label, "label", LookupEnvOrString("KEYPROXY_LABEL", KEYPROXY_LABEL_VALUE), "Value for 'keyproxy/release' label")
 	flag.IntVar(&config.Port, "port", LookupEnvOrInt("KEYPROXY_PORT", 8080), "TCP listen port")
 	flag.IntVar(&config.PodPort, "podport", LookupEnvOrInt("KEYPROXY_PODPORT", PODPORT), "Port the backend pod listens to")
 	flag.IntVar(&config.PodLifetime, "podlifetime", LookupEnvOrInt("KEYPROXY_PODLIFETIME", 120), "Pod Lifetime (minutes)")

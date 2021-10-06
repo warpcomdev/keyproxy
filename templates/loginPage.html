@@ -1,7 +1,7 @@
 <html>
 
 <head>
-    <link rel="stylesheet" href="/resources/css/default.css" />
+    <link rel="stylesheet" href="/podstatic/css/default.css" />
 </head>
 
 <body>
@@ -17,8 +17,8 @@
                 {{ .CSRFTag }}
             </form>
         </div>
-        {{ with .Message }}
-        <div id="loginmessage">
+        {{ with .ErrMessage }}
+        <div id="errmessage">
             <p>{{ . }}</p>
         </div>
         {{ end }}

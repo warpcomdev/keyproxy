@@ -20,13 +20,13 @@ import (
 
 // Paths that trigger server routines
 const (
-	RESOURCEPATH = "/resources/"
-	LOGINPATH    = "/podapi/login"
-	LOGOUTPATH   = "/podapi/logout"
-	HEALTHZPATH  = "/healthz"
-	KILLPATH     = "/podapi/kill"
-	SPAWNPATH    = "/podapi/spawn"
-	INFOPATH     = "/podapi/info"
+	STATICPATH  = "/podstatic/"
+	LOGINPATH   = "/podapi/login"
+	LOGOUTPATH  = "/podapi/logout"
+	HEALTHZPATH = "/healthz"
+	KILLPATH    = "/podapi/kill"
+	SPAWNPATH   = "/podapi/spawn"
+	INFOPATH    = "/podapi/info"
 )
 
 // Templates for each feedback page
@@ -62,7 +62,7 @@ type ProxyHandler struct {
 	Redirect      string // Where to redirect requests for "/"
 	ProxyScheme   string // // scheme for the login page, "http" or "https"
 	AppScheme     string // scheme for the app, "http" or "https"
-	Resources     fs.FS
+	Static        fs.FS
 	Api           *KubeAPI
 	Auth          *AuthManager
 	Factory       *PodFactory
@@ -72,15 +72,15 @@ type ProxyHandler struct {
 }
 
 // NewServer creates new proxy handler
-func NewServer(logger *log.Logger, redirect, proxyscheme, appscheme string, resources fs.FS, api *KubeAPI, auth *AuthManager, factory *PodFactory) (*ProxyHandler, error) {
-	templateGroup, err := htmlTemplate.New(SpawnTemplate).Funcs(sprig.FuncMap()).ParseFS(resources, "*.html")
+func NewServer(logger *log.Logger, redirect, proxyscheme, appscheme string, templates, static fs.FS, api *KubeAPI, auth *AuthManager, factory *PodFactory) (*ProxyHandler, error) {
+	templateGroup, err := htmlTemplate.New(SpawnTemplate).Funcs(sprig.FuncMap()).ParseFS(templates, "*.html")
 	if err != nil {
 		logger.WithError(err).Error("Failed to load templates")
 		return nil, err
 	}
 	handler := &ProxyHandler{
 		Logger:        logger,
-		Resources:     resources,
+		Static:        static,
 		Redirect:      redirect,
 		ProxyScheme:   proxyscheme,
 		AppScheme:     appscheme,
@@ -96,7 +96,7 @@ func NewServer(logger *log.Logger, redirect, proxyscheme, appscheme string, reso
 		csrf.SameSite(csrf.SameSiteStrictMode),
 	}
 	rand.Read(handler.csrfSecret)
-	handler.Handle(RESOURCEPATH, http.StripPrefix(RESOURCEPATH, http.FileServer(http.FS(resources))))
+	handler.Handle(STATICPATH, http.StripPrefix(STATICPATH, http.FileServer(http.FS(static))))
 	handler.Handle(LOGINPATH, Middleware(handler.login).CSRF(handler.csrfSecret, options...).Methods(http.MethodGet, http.MethodPost).Exhaust())
 	handler.Handle(LOGOUTPATH, Middleware(handler.logout).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, true).Methods(http.MethodGet).Exhaust())
 	handler.Handle(HEALTHZPATH, Middleware(handler.healthz).Methods(http.MethodGet).Exhaust())
@@ -149,26 +149,26 @@ func (h *ProxyHandler) login(w http.ResponseWriter, r *http.Request) {
 
 // LoginParams passed to login page template
 type LoginParams struct {
-	ProxyScheme string
-	AppScheme   string
-	Host        string
-	Service     string
-	Username    string
-	Message     string
-	CSRFTag     htmlTemplate.HTML
+	ProxyScheme string            `json:"proxyScheme"`
+	AppScheme   string            `json:"appScheme"`
+	Host        string            `json:"host"`
+	Service     string            `json:"service"`
+	Username    string            `json:"username"`
+	ErrMessage  string            `json:"errMessage"`
+	CSRFTag     htmlTemplate.HTML `json:"-"`
 }
 
 // TemplateParams passed to all other template pages
 type TemplateParams struct {
-	ProxyScheme string
-	AppScheme   string
-	Host        string
-	Service     string
-	Username    string
-	EventType   EventType
-	PodPhase    PodPhase
-	Ready       bool
-	Address     string
+	ProxyScheme string    `json:"proxyScheme"`
+	AppScheme   string    `json:"appScheme"`
+	Host        string    `json:"host"`
+	Service     string    `json:"service"`
+	Username    string    `json:"username"`
+	EventType   EventType `json:"event_type"`
+	PodPhase    PodPhase  `json:"pod_phase"`
+	Ready       bool      `json:"ready"`
+	Address     string    `json:"address"`
 }
 
 // loginPage renders the login page template
@@ -179,7 +179,7 @@ func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred Cr
 		Host:        r.Host,
 		Service:     cred.Service,
 		Username:    cred.Username,
-		Message:     msg,
+		ErrMessage:  msg,
 		CSRFTag:     csrf.TemplateField(r),
 	}
 	if err := h.templateGroup.ExecuteTemplate(w, LoginTemplate, params); err != nil {
@@ -287,7 +287,7 @@ func (h *ProxyHandler) healthz(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// errorPage renders the error page template
+// infoPage renders the info page template
 func (h *ProxyHandler) infoPage(w http.ResponseWriter, r *http.Request) {
 	h.Logger.Debug("Triggering Info Page")
 	session := r.Context().Value(SessionKeyType(0)).(Session)

@@ -21,14 +21,17 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-//go:embed resources/*
-var resources embed.FS
+//go:embed podstatic/*
+var podstatic embed.FS
+
+//go:embed templates/*
+var templates embed.FS
 
 // localResources checks if there is a local folder with resources.
 // Otherwise, it uses the embedded ones.
-func localResources(logger *log.Logger, resourceDir string) fs.FS {
-	loggerCtx := logger.WithField("resources", resourceDir)
-	stat, err := os.Stat(resourceDir)
+func localResources(logger *log.Logger, externalDir string, embedded fs.FS, embeddedSub string) fs.FS {
+	loggerCtx := logger.WithField("externalDir", externalDir)
+	stat, err := os.Stat(externalDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			panic(err)
@@ -36,13 +39,13 @@ func localResources(logger *log.Logger, resourceDir string) fs.FS {
 	} else {
 		if stat.IsDir() {
 			loggerCtx.Info("Using local resources")
-			return os.DirFS(resourceDir)
+			return os.DirFS(externalDir)
 		}
 	}
 	// Use embedded resources, but strip prefix to match
 	// the local dir use case.
 	loggerCtx.Info("Using embedded resources")
-	sub, err := fs.Sub(&resources, "resources")
+	sub, err := fs.Sub(embedded, embeddedSub)
 	if err != nil {
 		panic(err)
 	}
@@ -87,9 +90,11 @@ func main() {
 	auth := NewAuth(logger, time.Duration(config.SessionLifetime)*time.Minute, config.KeystoneURL, jwt.SigningMethodHS256, jwt.Keyfunc(func(*jwt.Token) (interface{}, error) { return signingKey, nil }))
 	defer auth.Cancel()
 
-	// TODO: Get resourceDir from environment variable
-	logger.WithFields(log.Fields{"proxyscheme": config.ProxyScheme, "appscheme": config.AppScheme, "resources": config.ResourceFolder}).Info("Building proxy server")
-	proxy, err := NewServer(logger, config.Redirect, config.ProxyScheme, config.AppScheme, localResources(logger, config.ResourceFolder), api, auth, factory)
+	logger.WithFields(log.Fields{"proxyscheme": config.ProxyScheme, "appscheme": config.AppScheme, "resources": config.StaticFolder}).Info("Building proxy server")
+	proxy, err := NewServer(logger, config.Redirect, config.ProxyScheme, config.AppScheme,
+		localResources(logger, config.TemplateFolder, templates, "templates"),
+		localResources(logger, config.StaticFolder, podstatic, "podstatic"),
+		api, auth, factory)
 	if err != nil {
 		panic(err)
 	}
