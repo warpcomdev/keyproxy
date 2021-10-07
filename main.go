@@ -94,8 +94,17 @@ func main() {
 	auth := auth.New(logger, time.Duration(config.SessionLifetime)*time.Minute, config.KeystoneURL, jwt.SigningMethodHS256, jwt.Keyfunc(func(*jwt.Token) (interface{}, error) { return signingKey, nil }))
 	defer auth.Cancel()
 
+	corsOrigins := make([]string, 0, 1)
+	if config.Devel {
+		logger.Warn("Running in devel mode")
+		corsOrigins = append(corsOrigins, "http://localhost:3000")
+	} else {
+		logger.Info("Running in prod mode")
+	}
+
 	logger.WithFields(log.Fields{"proxyscheme": config.ProxyScheme, "appscheme": config.AppScheme, "resources": config.StaticFolder}).Info("Building proxy server")
 	proxy, err := server.New(logger, config.Redirect, config.ProxyScheme, config.AppScheme,
+		corsOrigins,
 		localResources(logger, config.TemplateFolder, templates, "templates"),
 		localResources(logger, config.StaticFolder, podstatic, "podstatic"),
 		api, auth, factory)

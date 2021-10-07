@@ -48,7 +48,7 @@ const SESSIONCOOKIE = "KEYPROXY_SESSION"
 const CSRFCOOKIE = "KEYPROXY_CSRF"
 
 // CSRF Header Name
-const CSRFHEADER = "X-CSRF-Token"
+const CSRFHEADER = "X-Csrf-Token"
 
 // AuthSessionKeyType used for storing session in request context.
 type SessionKeyType int
@@ -79,7 +79,7 @@ type ProxyHandler struct {
 }
 
 // New creates new proxy handler
-func New(logger *log.Logger, redirect, proxyscheme, appscheme string, templates, static fs.FS, api *kube.API, authManager *auth.Manager, factory *kube.Factory) (*ProxyHandler, error) {
+func New(logger *log.Logger, redirect, proxyscheme, appscheme string, corsOrigins []string, templates, static fs.FS, api *kube.API, authManager *auth.Manager, factory *kube.Factory) (*ProxyHandler, error) {
 	templateGroup, err := htmlTemplate.New(SpawnTemplate).Funcs(sprig.FuncMap()).ParseFS(templates, "*.html")
 	if err != nil {
 		logger.WithError(err).Error("Failed to load templates")
@@ -111,14 +111,37 @@ func New(logger *log.Logger, redirect, proxyscheme, appscheme string, templates,
 		csrf.SameSite(csrf.SameSiteStrictMode),
 	}
 	rand.Read(handler.csrfSecret)
+
+	corsHeaders := []string{
+		"Content-Type",
+		CSRFHEADER,
+	}
 	handler.Handle(STATICPATH, http.StripPrefix(STATICPATH, http.FileServer(http.FS(static))))
-	handler.Handle(LOGINPATH, Middleware(handler.login).CSRF(handler.csrfSecret, options...).Methods(http.MethodGet, http.MethodPost).Exhaust())
-	handler.Handle(LOGOUTPATH, Middleware(handler.logout).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle(HEALTHZPATH, Middleware(handler.healthz).Methods(http.MethodGet).Exhaust())
-	handler.Handle(INFOPATH, Middleware(handler.infoPage).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle(KILLPATH, Middleware(handler.killPage).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle(SPAWNPATH, Middleware(handler.spawnPage).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).Methods(http.MethodGet).Exhaust())
-	handler.Handle("/", Middleware(handler.forward).Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, false)) // do not exhaust, in case it upgrades to websocket
+	handler.Handle(LOGINPATH, Middleware(handler.login).
+		CSRF(handler.csrfSecret, options...).
+		Methods(corsHeaders, corsOrigins, http.MethodGet, http.MethodPost).
+		Exhaust())
+	handler.Handle(LOGOUTPATH, Middleware(handler.logout).
+		Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).
+		Methods(corsHeaders, corsOrigins, http.MethodGet).
+		Exhaust())
+	handler.Handle(HEALTHZPATH, Middleware(handler.healthz).
+		Methods(corsHeaders, corsOrigins, http.MethodGet).
+		Exhaust())
+	handler.Handle(INFOPATH, Middleware(handler.infoPage).
+		Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).
+		Methods(corsHeaders, corsOrigins, http.MethodGet).
+		Exhaust())
+	handler.Handle(KILLPATH, Middleware(handler.killPage).
+		Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).
+		Methods(corsHeaders, corsOrigins, http.MethodGet).
+		Exhaust())
+	handler.Handle(SPAWNPATH, Middleware(handler.spawnPage).
+		Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).
+		Methods(corsHeaders, corsOrigins, http.MethodGet).
+		Exhaust())
+	handler.Handle("/", Middleware(handler.forward).
+		Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, false)) // do not exhaust, in case it upgrades to websocket
 	// Add support for pprof
 	handler.Handle("/debug/pprof", http.DefaultServeMux)
 	handler.Tick(time.Second)
@@ -197,6 +220,7 @@ func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred au
 		ErrMessage:  msg,
 		CSRFTag:     csrf.TemplateField(r),
 	}
+	w.Header().Set(CSRFHEADER, csrf.Token(r))
 	// If this is an API call, return json
 	if isApiCall(r) {
 		apiReply(h.Logger.WithField("msg", msg), w, params)
@@ -210,11 +234,10 @@ func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred au
 // LoginForm processes the login form and sets a cookie
 func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 
-	// Get credentials. Form already parsed by CSRF
-	/*if err := r.ParseForm(); err != nil {
+	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Failed to parse form data", http.StatusBadRequest)
 		return
-	}*/
+	}
 	cred := auth.Credentials{
 		Service:  strings.TrimSpace(r.Form.Get("service")),
 		Username: strings.TrimSpace(r.Form.Get("username")),

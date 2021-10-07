@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -39,6 +40,7 @@ type Config struct {
 	GracefulShutdown int
 	Threads          int
 	Labels           map[string]string
+	Devel            bool
 }
 
 func GetConfig() *Config {
@@ -61,6 +63,7 @@ func GetConfig() *Config {
 	flag.IntVar(&config.SessionLifetime, "sessionlifetime", LookupEnvOrInt("KEYPROXY_SESSIONLIFETIME", 60), "Session lifetime (minutes)")
 	flag.IntVar(&config.GracefulShutdown, "shutdown", LookupEnvOrInt("KEYPROXY_SHUTDOWN", 30), "Graceful shutdown (seconds)")
 	flag.IntVar(&config.Threads, "threads", LookupEnvOrInt("KEYPROXY_THREADS", 10), "Number of controller threads")
+	flag.BoolVar(&config.Devel, "devel", LookupEnvOrBool("KEYPROXY_DEVEL"), "True to enable devel mode")
 	flag.Parse()
 
 	if config.ForwardedProto != "" && config.ForwardedProto != "http" && config.ForwardedProto != "https" {
@@ -133,4 +136,15 @@ func LookupEnvOrInt(key string, defaultVal int) int {
 		return v
 	}
 	return defaultVal
+}
+
+func LookupEnvOrBool(key string) bool {
+	if val, ok := os.LookupEnv(key); ok {
+		for _, truish := range []string{"1", "y", "yes", "t", "true", "s", "si", "sí", "on"} {
+			if strings.EqualFold(val, truish) {
+				return true
+			}
+		}
+	}
+	return false
 }
