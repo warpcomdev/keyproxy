@@ -1,0 +1,56 @@
+body {
+    font-family: Roboto, Arial, Helvetica, sans-serif;
+    color: #e8e8e8;
+    background-color: #282828
+}
+
+/* Set a style for all buttons */
+button {
+    background-color: limegreen;
+    color: white;
+    padding: 14px 20px;
+    margin: 8px 0;
+    border: none;
+    cursor: pointer;
+}
+
+/* Add a hover effect for buttons */
+button:hover {
+    opacity: 0.8;
+}
+
+button:disabled,
+button[disabled]{
+border: 1px solid darkgray;
+background-color: lightgray;
+color: darkslategray;
+}
+
+/* Full-width inputs */
+input[type='text'],
+input[type='password'] {
+    border: 1px solid gray;
+    box-sizing: border-box;
+    margin-left: 1rem;
+}
+
+/* Modify cursor while waiting */
+.cursor_wait {
+    cursor: 'wait'
+}
+
+/* Err box, empty or full */
+div.emptymsgbox {
+    display: none;
+    padding: 1rem;
+}
+div.errbox {
+    display: block !important;
+    background-color: Linen;
+    color: Red;
+}
+div.infobox {
+    display: block !important;
+    background-color: lightgrey;
+    color: black;
+}
