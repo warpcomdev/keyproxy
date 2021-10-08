@@ -317,7 +317,11 @@ func (h *ProxyHandler) logout(w http.ResponseWriter, r *http.Request) {
 	h.Logger.Debug("Triggering LOGOUT Path")
 	session := r.Context().Value(SessionKeyType(0)).(Session)
 	h.Auth.Logout(session.AuthSession)
-	http.SetCookie(w, &http.Cookie{Name: SESSIONCOOKIE, Value: ""})
+	http.SetCookie(w, &http.Cookie{
+		Name:   SESSIONCOOKIE,
+		Value:  "",
+		MaxAge: -1,
+	})
 	if isApiCall(r) {
 		apiReply(session.Logger, w, TemplateParams{
 			ProxyScheme: h.ProxyScheme,
@@ -381,6 +385,7 @@ func (h *ProxyHandler) killPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	session.Logger.Info("pod killed")
 	params, err := h.NewParams(r, session, false)
 	if err != nil {
 		session.Logger.WithError(err).Error("Failed to create params after killing pod")
