@@ -8,11 +8,12 @@ COPY src /app/src
 COPY podstatic /app/podstatic
 RUN  npm run build
 
-FROM golang:1.17 AS builder
+FROM golang:1.16 AS builder
 WORKDIR /app
 COPY go.mod go.sum *.go /app/
 COPY configs /app/configs
 COPY templates /app/templates
+COPY internal /app/internal
 COPY --from=node_builder /app/podstatic /app/podstatic
 RUN  CGO_ENABLED=0 go build
 
