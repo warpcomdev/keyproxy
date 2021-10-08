@@ -159,8 +159,8 @@
 			<input type="password" placeholder="password" id="password" name="password" bind:value={password} bind:this={passwordField}/>
 			<label for="service">Servicio</label>
 			<input type="text" placeholder="Servicio" id="service" name="service" bind:value={service} />
-			<button on:click|preventDefault={clicked} disabled={submitDisabled}>Submit</button>
-			<div class:errbox={errMsg != ""} class="emptyerrbox">
+			<button on:click|preventDefault={clicked} disabled={submitDisabled}>Iniciar sesión</button>
+			<div class:errbox={errMsg != ""} class="emptymsgbox">
 				{errMsg}
 			</div>
 		</div>

@@ -6,8 +6,9 @@ body {
 
 /* Set a style for all buttons */
 button {
-    background-color: limegreen;
-    color: white;
+    background-color: lightskyblue;
+    color: black;
+    font-weight: bold;
     padding: 14px 20px;
     margin: 8px 0;
     border: none;
@@ -24,6 +25,7 @@ button[disabled]{
 border: 1px solid darkgray;
 background-color: lightgray;
 color: darkslategray;
+font-weight: normal;
 }
 
 /* Full-width inputs */
@@ -32,6 +34,7 @@ input[type='password'] {
     border: 1px solid gray;
     box-sizing: border-box;
     margin-left: 1rem;
+    padding: 0.5em;
 }
 
 /* Modify cursor while waiting */
@@ -54,3 +57,4 @@ div.infobox {
     background-color: lightgrey;
     color: black;
 }
+

@@ -3,8 +3,17 @@
 	import { createEventDispatcher } from 'svelte';
 	import { appInfo, loginInfo, podInfo } from '$lib/stores.js';
 
-	export let triggered = false;
+	export let target  = 0; // 0 = deleted, 1 = ready
 	export let autoRefresh = 0; // seconds
+	export const triggerRefresh = function() {
+		if (podTimer !== null) {
+			clearTimeout(podTimer);
+		}
+		if(autoRefresh > 0) {
+			podTimer = setTimeout(function() { podPromise = refresh(); }, 100);
+		}
+	}
+
 	// Dispatch 'login' on auth failed, 'update' on status change
 	const dispatch = createEventDispatcher();
 
@@ -89,8 +98,11 @@
 			lastUpdate = (new Date()).toLocaleString();
 			podPromise = null;
 			if (autoRefresh > 0) {
-				if ($podInfo.event == "DELETED") {
-					// Una vez borrado, no tiene mucho sentido seguir refrescando.
+				if ($podInfo.event === "DELETED" && target == 0) {
+					// Si el target es 0, cortamos el refresco cuando esté borrado.
+					autoRefresh = 0;
+				} else if ($podInfo.ready === true && target == 1) {
+					// Si el target es 1, cortamos el refresco cuando esté listo.
 					autoRefresh = 0;
 				} else {
 					podTimer = setTimeout(refresh, autoRefresh * 1000);
@@ -110,17 +122,6 @@
 			clearTimeout(podTimer);
 			podTimer = null;
 		}
-
-		// Aoturefresh can be triggered from the outside.
-		if (triggered) {
-			if (podTimer !== null) {
-				clearTimeout(podTimer);
-			}
-			if(autoRefresh > 0) {
-				podTimer = setTimeout(function() { podPromise = refresh(); }, 100);
-			}
-			triggered = false;
-		}
 	}
 </script>
 
@@ -132,7 +133,7 @@
 		<dt>Estado actual de su pod</dt><dd>{$podInfo.phase}</dd>
 		<dt>Acceso a aplicación</dt><dd>
 			{#if $podInfo.ready}
-			<a href="{$appInfo.scheme}://{$appInfo.host}">Aplicación lista</a>
+			<a href="{$appInfo.scheme}://{$appInfo.host}" target="_blank">Aplicación lista</a>
 			{:else}
 			No acepta conexión.
 			{/if}
@@ -161,8 +162,15 @@
 		grid-template-columns: max-content auto;
 		grid-gap: 1rem;
 		padding: 16px;
+		border: 1px solid white;
 	}
 	select {
 		width: max-content;
+	}
+	dl dd {
+    	font-weight: bold;
+	}
+	dl dt:after {
+    	content: ':';
 	}
 </style>
