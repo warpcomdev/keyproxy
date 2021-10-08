@@ -1,12 +1,14 @@
-package main
+package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/csrf"
 	log "github.com/sirupsen/logrus"
@@ -14,6 +16,26 @@ import (
 
 type middleware struct {
 	http.Handler
+}
+
+// IsAPICall returns true if request Accepts 'application/json'
+func isApiCall(r *http.Request) bool {
+	for _, accept := range r.Header.Values("Accept") {
+		if strings.HasPrefix(accept, "application/json") {
+			return true
+		}
+	}
+	return false
+}
+
+// apiReply serializes an API reply
+func apiReply(logger *log.Entry, w http.ResponseWriter, data interface{}) {
+	encoder := json.NewEncoder(w)
+	w.Header().Add(http.CanonicalHeaderKey("Content-Type"), "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	if err := encoder.Encode(data); err != nil {
+		logger.WithError(err).Error("Failed to serialize API response")
+	}
 }
 
 // Middleware constructor facilitates chaining middlewares
@@ -31,7 +53,7 @@ func (m *middleware) CSRF(csrfSecret []byte, options ...csrf.Option) *middleware
 }
 
 // Auth checks authentication and stores session in context.
-func (m *middleware) Auth(scheme string, cookieName string, check func(ctx context.Context, token string) (context.Context, error), redirectAlways bool) *middleware {
+func (m *middleware) Auth(scheme string, cookieName string, check func(ctx context.Context, token string) (context.Context, error), loginPath string, redirectAlways bool) *middleware {
 	handler := m.Handler
 	m.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
@@ -58,8 +80,8 @@ func (m *middleware) Auth(scheme string, cookieName string, check func(ctx conte
 
 		// Check if we could retrieve the context
 		if ctx == nil {
-			if redirectAlways || (r.URL.Path == "/" && r.Method == http.MethodGet) {
-				redirectPath := fmt.Sprintf("%s://%s%s", scheme, r.Host, LOGINPATH)
+			if !isApiCall(r) && (redirectAlways || (r.URL.Path == "/" && r.Method == http.MethodGet)) {
+				redirectPath := fmt.Sprintf("%s://%s%s", scheme, r.Host, loginPath)
 				http.Redirect(w, r, redirectPath, statusRedirect)
 			} else {
 				http.Error(w, "Invalid credentials", http.StatusUnauthorized)
@@ -82,11 +104,19 @@ func (m *middleware) Exhaust() *middleware {
 }
 
 // Methods check the request method is supported
-func (m *middleware) Methods(methods ...string) *middleware {
+func (m *middleware) Methods(headers, origins []string, methods ...string) *middleware {
 	handler := m.Handler
+	chainedMethods := strings.Join(methods, ", ") + ", OPTIONS"
+	chainedHeaders := strings.Join(headers, ", ") + ", Credentials"
 	m.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			addCORS(w, r, chainedMethods, chainedHeaders, origins)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		for _, method := range methods {
 			if r.Method == method {
+				addCORS(w, r, chainedMethods, chainedHeaders, origins)
 				handler.ServeHTTP(w, r)
 				return
 			}
@@ -94,6 +124,36 @@ func (m *middleware) Methods(methods ...string) *middleware {
 		http.Error(w, fmt.Sprintf("Unsupported method %s", r.Method), http.StatusBadRequest)
 	})
 	return m
+}
+
+func addCORS(w http.ResponseWriter, r *http.Request, methods string, headers string, origins []string) {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return
+	}
+	match := false
+	switch {
+	// Always match the current host, either http or https
+	case strings.HasPrefix(origin, "https://") && origin[8:] == r.Host:
+		match = true
+	case strings.HasPrefix(origin, "http://") && origin[7:] == r.Host:
+		match = true
+	default:
+		for _, allowed := range origins {
+			if origin == allowed {
+				match = true
+				break
+			}
+		}
+	}
+	if match {
+		w.Header().Add("Vary", "Origin")
+		w.Header().Add("Access-Control-Allow-Methods", methods)
+		w.Header().Add("Access-Control-Allow-Headers", headers)
+		w.Header().Add("Access-Control-Expose-Headers", headers)
+		w.Header().Add("Access-Control-Allow-Origin", origin)
+		w.Header().Add("Access-Control-Allow-Credentials", "true")
+	}
 }
 
 // Exhaust the request body

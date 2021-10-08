@@ -1,20 +1,20 @@
 <html>
 
 <head>
-    <link rel="stylesheet" href="/resources/css/default.css" />
+    <link rel="stylesheet" href="/podstatic/css/default.css" />
 </head>
 
 <body>
     <div id="frame">
         <div id="status">
-            <p>Your pod is in service. If you just spawned it, it might take a few minutes to become available.</p>
+            <p>Your order to spawn your pod has been processed.</p>
+            <p>It might take a few minutes for your pod to boot up.</p>
         </div>
         {{ template "tables.html" . }}
         <div id="links">
             <p>Note: This page does not autorefresh.</p>
             <ul>
                 <li>To check the current status of your pod, please click <a href="/podapi/info">here</a></li>
-                <li>When the pod becomes Ready with an IP, please click <a href="{{ .AppScheme }}://{{ .Host }}">here</a></li>
             </ul>
         </div>
     </div>

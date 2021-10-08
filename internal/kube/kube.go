@@ -1,4 +1,4 @@
-package main
+package kube
 
 import (
 	"context"
@@ -15,6 +15,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/informers"
 	informersv1 "k8s.io/client-go/informers/core/v1"
@@ -87,8 +88,8 @@ func (err PodKindError) Error() string {
 
 var CacheSyncError = errors.New("Failed to synchronize cache")
 
-// KubeAPI encapsulates calls to Kubernetes API
-type KubeAPI struct {
+// API encapsulates calls to Kubernetes API
+type API struct {
 	Logger         *log.Logger
 	KubeconfigPath string
 	Namespace      string
@@ -99,9 +100,9 @@ type KubeAPI struct {
 	cancelFunc     func()
 }
 
-// NewAPI tries to build API by autodiscovering cluster and namespace
-func NewLoop(logger *log.Logger, namespace string, handler EventHandler, threads int, labels map[string]string) (*KubeAPI, error) {
-	k := &KubeAPI{
+// Loop tries to build API by autodiscovering cluster and namespace
+func Loop(logger *log.Logger, namespace string, handler EventHandler, threads int, labels map[string]string) (*API, error) {
+	k := &API{
 		Logger:         logger,
 		KubeconfigPath: filepath.Join(homedir.HomeDir(), ".kube", "config"),
 	}
@@ -160,7 +161,7 @@ func NewLoop(logger *log.Logger, namespace string, handler EventHandler, threads
 }
 
 // Cancel the factory and listeners
-func (k *KubeAPI) Cancel() {
+func (k *API) Cancel() {
 	if k.cancelFunc != nil {
 		k.cancelFunc() // this will stop the informerFactory and informer
 		k.cancelFunc = nil
@@ -171,7 +172,7 @@ func (k *KubeAPI) Cancel() {
 
 // See https://github.com/kubernetes/kubernetes/pull/63707
 // and https://stackoverflow.com/questions/55314152/how-to-get-namespace-from-current-context-set-in-kube-config/65661997#65661997
-func (k *KubeAPI) namespace() string {
+func (k *API) namespace() string {
 	// This way assumes you've set the POD_NAMESPACE environment variable using the downward API.
 	// This check has to be done first for backwards compatibility with the way InClusterConfig was originally set up
 	if ns, ok := os.LookupEnv("POD_NAMESPACE"); ok {
@@ -190,7 +191,7 @@ func (k *KubeAPI) namespace() string {
 }
 
 // PodStatus gets the pod's current status and IP address
-func (k *KubeAPI) PodStatus(name string) (PodInfo, error) {
+func (k *API) PodStatus(name string) (PodInfo, error) {
 	pod, err := k.podInformer.Lister().Pods(k.Namespace).Get(name)
 	if err != nil {
 		if kerrors.IsNotFound(err) {
@@ -212,7 +213,7 @@ func (k *KubeAPI) PodStatus(name string) (PodInfo, error) {
 }
 
 // Enqueue informer events to work queue
-func (k *KubeAPI) enqueue(ctx context.Context) {
+func (k *API) enqueue(ctx context.Context) {
 	defer k.waitGroup.Done()
 	defer utilruntime.HandleCrash()
 	logger := k.Logger
@@ -233,7 +234,7 @@ func (k *KubeAPI) enqueue(ctx context.Context) {
 }
 
 // onUpdate queues the key if err is nil
-func (k *KubeAPI) onUpdate(key string, err error) {
+func (k *API) onUpdate(key string, err error) {
 	if err != nil {
 		k.Logger.WithError(err).Error("Failed to decode received obj")
 		return
@@ -242,7 +243,7 @@ func (k *KubeAPI) onUpdate(key string, err error) {
 }
 
 // dequete work items
-func (k *KubeAPI) dequeue(handler EventHandler) {
+func (k *API) dequeue(handler EventHandler) {
 	defer k.waitGroup.Done()
 	defer utilruntime.HandleCrash()
 	for k.forwardEvent(handler) {
@@ -250,7 +251,7 @@ func (k *KubeAPI) dequeue(handler EventHandler) {
 }
 
 // forwardEvent manages the item
-func (k *KubeAPI) forwardEvent(handler EventHandler) bool {
+func (k *API) forwardEvent(handler EventHandler) bool {
 	obj, shutdown := k.queue.Get()
 	if shutdown {
 		return false
@@ -290,7 +291,7 @@ func (k *KubeAPI) forwardEvent(handler EventHandler) bool {
 }
 
 // Decode reads the yaml descriptor for a pod
-func (k *KubeAPI) Decode(template string) (*PodDescriptor, error) {
+func (k *API) Decode(template string) (*PodDescriptor, error) {
 	decoder := scheme.Codecs.UniversalDeserializer()
 	obj, _, err := decoder.Decode([]byte(template), nil, nil)
 	if err != nil {
@@ -304,7 +305,7 @@ func (k *KubeAPI) Decode(template string) (*PodDescriptor, error) {
 }
 
 // DeletePod destroys pod by name
-func (k *KubeAPI) DeletePod(ctx context.Context, name string) error {
+func (k *API) DeletePod(ctx context.Context, name string) error {
 	err := k.client.CoreV1().Pods(k.Namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil && kerrors.IsNotFound(err) {
 		log.WithField("name", name).Info("Pod does not exist, skipping")
@@ -314,7 +315,7 @@ func (k *KubeAPI) DeletePod(ctx context.Context, name string) error {
 }
 
 // CreatePod with given PodDescriptor
-func (k *KubeAPI) CreatePod(ctx context.Context, desc *PodDescriptor) error {
+func (k *API) CreatePod(ctx context.Context, desc *PodDescriptor) error {
 	pod, err := k.client.CoreV1().Pods(k.Namespace).Create(ctx, desc, metav1.CreateOptions{})
 	if err != nil {
 		if !kerrors.IsAlreadyExists(err) {
@@ -323,4 +324,9 @@ func (k *KubeAPI) CreatePod(ctx context.Context, desc *PodDescriptor) error {
 		log.WithField("name", pod.Name).Info("Pod already exists, skipping")
 	}
 	return nil
+}
+
+// ServerVersion returns server version
+func (k *API) ServerVersion() (*version.Info, error) {
+	return k.client.ServerVersion()
 }

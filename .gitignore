@@ -1,3 +1,10 @@
+# Svelte-Kit files
+.DS_Store
+node_modules
+/build
+/.svelte-kit
+/podstatic
+
 # Binaries for programs and plugins
 *.exe
 *.exe~
@@ -14,3 +21,4 @@ keyproxy
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+.env

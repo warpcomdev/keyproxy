@@ -1,4 +1,4 @@
-package main
+package kube
 
 import (
 	"bytes"
@@ -9,6 +9,8 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/warpcomdev/keyproxy/internal/auth"
+	"github.com/warpcomdev/keyproxy/internal/clock"
 )
 
 const (
@@ -17,9 +19,9 @@ const (
 
 var ErrorFactoryCancelled = errors.New("PodFactory is being cancelled")
 
-type PodFactory struct {
-	// TimeKeeper must be at the top of the struct for atomic calls
-	TimeKeeper
+type Factory struct {
+	// Keeper must be at the top of the struct for atomic calls
+	clock.Keeper
 	Logger         *log.Logger
 	Template       *template.Template
 	Lifetime       time.Duration
@@ -27,27 +29,29 @@ type PodFactory struct {
 	Port           int
 	ForwardedProto string
 	BufferPool     sync.Pool
-	managers       map[Credentials]*PodManager
-	managersByKey  map[string]*PodManager
+	SessionCookie  string
+	managers       map[auth.Credentials]*Manager
+	managersByKey  map[string]*Manager
 	Labels         map[string]string
 }
 
-// NewFactory creates a Factory for PodManagers
-func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Duration, scheme string, port int, forwardedProto string, labels map[string]string) *PodFactory {
-	factory := &PodFactory{
+// NewFactory creates a Factory for Managers
+func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Duration, scheme string, port int, forwardedProto string, sessionCookie string, labels map[string]string) *Factory {
+	factory := &Factory{
 		Logger:         logger,
 		Template:       tmpl,
 		Lifetime:       lifetime,
 		Scheme:         scheme,
 		Port:           port,
 		ForwardedProto: forwardedProto,
+		SessionCookie:  sessionCookie,
 		BufferPool: sync.Pool{
 			New: func() interface{} {
 				return make([]byte, BUFFER_POOL_SIZE)
 			},
 		},
-		managers:      make(map[Credentials]*PodManager),
-		managersByKey: make(map[string]*PodManager),
+		managers:      make(map[auth.Credentials]*Manager),
+		managersByKey: make(map[string]*Manager),
 		Labels:        labels,
 	}
 	// Keep track of time
@@ -56,13 +60,13 @@ func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Durat
 }
 
 // Find manager for the given credentials.
-func (f *PodFactory) Find(api *KubeAPI, creds Credentials) (*PodManager, error) {
+func (f *Factory) Find(api *API, creds auth.Credentials) (*Manager, error) {
 	logger := f.Logger.WithField("creds", creds)
 	f.Mutex.Lock()
 	defer f.Mutex.Unlock()
 	mgr, ok := f.managers[creds]
 	if !ok {
-		if f.cancelFunc == nil {
+		if f.CancelFunc == nil {
 			return nil, ErrorFactoryCancelled
 		}
 		logger.Info("Creating new manager")
@@ -85,7 +89,7 @@ type PodParameters struct {
 
 // newManager creates a manager and starts the pod watch.
 // This must be called with the mutex held.
-func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, error) {
+func (f *Factory) newManager(api *API, creds auth.Credentials) (*Manager, error) {
 	buffer := &bytes.Buffer{}
 	params := PodParameters{
 		Username:  creds.Username,
@@ -108,13 +112,14 @@ func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, e
 		labels[k] = v
 	}
 	pod.ObjectMeta.Labels = labels
-	manager := &PodManager{
+	manager := &Manager{
 		Logger:         f.Logger,
 		Descriptor:     pod,
 		Scheme:         f.Scheme,
 		Port:           f.Port,
 		ForwardedProto: f.ForwardedProto,
 		Pool:           f,
+		SessionCookie:  f.SessionCookie,
 	}
 	f.managers[creds] = manager
 	f.managersByKey[pod.GetName()] = manager
@@ -124,7 +129,7 @@ func (f *PodFactory) newManager(api *KubeAPI, creds Credentials) (*PodManager, e
 }
 
 // Watch podmanager lifetime, calls f.Group.Done() when done
-func (f *PodFactory) watch(api *KubeAPI, creds Credentials, manager *PodManager) {
+func (f *Factory) watch(api *API, creds auth.Credentials, manager *Manager) {
 	defer f.Group.Done()
 	deadline := time.NewTimer(f.Lifetime + time.Second)
 	logger := f.Logger.WithFields(log.Fields{"creds": creds, "name": manager.Descriptor.GetName()})
@@ -149,7 +154,7 @@ func (f *PodFactory) watch(api *KubeAPI, creds Credentials, manager *PodManager)
 				remaining = f.Lifetime / 2
 			}
 			deadline = time.NewTimer(remaining + time.Second)
-		case <-f.cancelCtx.Done():
+		case <-f.CancelCtx.Done():
 			deadline.Stop()
 			return
 		}
@@ -157,7 +162,7 @@ func (f *PodFactory) watch(api *KubeAPI, creds Credentials, manager *PodManager)
 }
 
 // Update manager status on pod info received
-func (f *PodFactory) Update(info PodInfo) error {
+func (f *Factory) Update(info PodInfo) error {
 	f.Mutex.Lock()
 	manager, ok := f.managersByKey[info.Name]
 	f.Mutex.Unlock()
@@ -168,11 +173,11 @@ func (f *PodFactory) Update(info PodInfo) error {
 }
 
 // Get implements httputil.BufferPool
-func (f *PodFactory) Get() []byte {
+func (f *Factory) Get() []byte {
 	return f.BufferPool.Get().([]byte)
 }
 
 // Put implements httputil.BufferPool
-func (f *PodFactory) Put(buf []byte) {
+func (f *Factory) Put(buf []byte) {
 	f.BufferPool.Put(buf)
 }
