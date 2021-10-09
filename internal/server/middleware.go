@@ -48,7 +48,21 @@ func Middleware(handlerFunc func(w http.ResponseWriter, r *http.Request)) *middl
 // CSRF uses gorilla.csrf to CSRF protect paths
 func (m *middleware) CSRF(csrfSecret []byte, options ...csrf.Option) *middleware {
 	handler := m.Handler
-	m.Handler = csrf.Protect(csrfSecret, options...)(handler)
+	setHeader := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(CSRFHEADER, csrf.Token(r))
+		handler.ServeHTTP(w, r)
+	}
+	m.Handler = csrf.Protect(csrfSecret, options...)(http.HandlerFunc(setHeader))
+	return m
+}
+
+// FakeCSRF sets a fake CSRFHeader when proxyprotocol is http.
+func (m *middleware) FakeCSRF() *middleware {
+	handler := m.Handler
+	m.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(CSRFHEADER, "CSRF-Disabled-over-HTTP")
+		handler.ServeHTTP(w, r)
+	})
 	return m
 }
 

@@ -40,7 +40,8 @@ type Config struct {
 	GracefulShutdown int
 	Threads          int
 	Labels           map[string]string
-	Devel            bool
+	Cors             []string
+	Offline          bool
 }
 
 func GetConfig() *Config {
@@ -63,7 +64,9 @@ func GetConfig() *Config {
 	flag.IntVar(&config.SessionLifetime, "sessionlifetime", LookupEnvOrInt("KEYPROXY_SESSIONLIFETIME", 60), "Session lifetime (minutes)")
 	flag.IntVar(&config.GracefulShutdown, "shutdown", LookupEnvOrInt("KEYPROXY_SHUTDOWN", 30), "Graceful shutdown (seconds)")
 	flag.IntVar(&config.Threads, "threads", LookupEnvOrInt("KEYPROXY_THREADS", 10), "Number of controller threads")
-	flag.BoolVar(&config.Devel, "devel", LookupEnvOrBool("KEYPROXY_DEVEL"), "True to enable devel mode")
+	flag.BoolVar(&config.Offline, "offline", LookupEnvOrBool("KEYPROXY_OFFLINE"), "Offline mode - for WEB UI testing")
+	var cors string
+	flag.StringVar(&cors, "cors", LookupEnvOrString("KEYPROXY_CORS", ""), "Comma-separated list of allowed CORS origins")
 	flag.Parse()
 
 	if config.ForwardedProto != "" && config.ForwardedProto != "http" && config.ForwardedProto != "https" {
@@ -117,6 +120,16 @@ func GetConfig() *Config {
 	}
 	config.Labels = make(map[string]string)
 	config.Labels[KEYPROXY_LABEL_NAME] = label
+	origins := make([]string, 0, 8)
+	if cors != "" {
+		for _, origin := range strings.Split(cors, ",") {
+			trimmed := strings.TrimSpace(origin)
+			if trimmed != "" {
+				origins = append(origins, trimmed)
+			}
+		}
+	}
+	config.Cors = origins
 	return config
 }
 

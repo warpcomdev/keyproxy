@@ -50,12 +50,36 @@ const CSRFCOOKIE = "KEYPROXY_CSRF"
 // CSRF Header Name
 const CSRFHEADER = "X-Csrf-Token"
 
+// AuthSession encapsulates the methods expected from auth session
+type AuthSession interface {
+	kube.JWTSession
+	Logout()
+}
+
+// AuthManager encapsulates the methods expected from auth manager
+type AuthManager interface {
+	Check(token string) (auth.Credentials, AuthSession, error)
+	Login(creds auth.Credentials, password string) (AuthSession, error)
+}
+
+// KubeManager encapsulates the methods expected from a pod manager
+type KubeManager interface {
+	Delete(context.Context) error
+	Proxy(ctx context.Context, create bool) (*kube.PodProxy, kube.PodInfo, error)
+}
+
+// KubeFactory encapsulates method sexpected from a pod factory
+type KubeFactory interface {
+	Find(auth.Credentials) (KubeManager, error)
+	ServerVersion() (version fmt.Stringer, err error)
+}
+
 // AuthSessionKeyType used for storing session in request context.
 type SessionKeyType int
 type Session struct {
 	Credentials auth.Credentials
-	AuthSession *auth.Session
-	Manager     *kube.Manager
+	AuthSession AuthSession
+	Manager     KubeManager
 	Logger      *log.Entry
 }
 
@@ -70,16 +94,15 @@ type ProxyHandler struct {
 	AppScheme     string // scheme for the app, "http" or "https"
 	Static        fs.FS
 	StaticLogin   bool // true if there is an 'index.html' in podstatic
-	Api           *kube.API
-	Auth          *auth.Manager
-	Factory       *kube.Factory
+	Auth          AuthManager
+	Factory       KubeFactory
 	csrfSecret    []byte
 	templateGroup *htmlTemplate.Template
 	*http.ServeMux
 }
 
 // New creates new proxy handler
-func New(logger *log.Logger, redirect, proxyscheme, appscheme string, corsOrigins []string, templates, static fs.FS, api *kube.API, authManager *auth.Manager, factory *kube.Factory) (*ProxyHandler, error) {
+func New(logger *log.Logger, redirect, proxyscheme, appscheme string, corsOrigins []string, templates, static fs.FS, authManager AuthManager, factory KubeFactory) (*ProxyHandler, error) {
 	templateGroup, err := htmlTemplate.New(SpawnTemplate).Funcs(sprig.FuncMap()).ParseFS(templates, "*.html")
 	if err != nil {
 		logger.WithError(err).Error("Failed to load templates")
@@ -98,7 +121,6 @@ func New(logger *log.Logger, redirect, proxyscheme, appscheme string, corsOrigin
 		Redirect:      redirect,
 		ProxyScheme:   proxyscheme,
 		AppScheme:     appscheme,
-		Api:           api,
 		Auth:          authManager,
 		Factory:       factory,
 		templateGroup: templateGroup,
@@ -117,10 +139,19 @@ func New(logger *log.Logger, redirect, proxyscheme, appscheme string, corsOrigin
 		CSRFHEADER,
 	}
 	handler.Handle(STATICPATH, http.StripPrefix(STATICPATH, http.FileServer(http.FS(static))))
-	handler.Handle(LOGINPATH, Middleware(handler.login).
-		CSRF(handler.csrfSecret, options...).
-		Methods(corsHeaders, corsOrigins, http.MethodGet, http.MethodPost).
-		Exhaust())
+	if proxyscheme == "https" {
+		handler.Handle(LOGINPATH, Middleware(handler.login).
+			CSRF(handler.csrfSecret, options...).
+			Methods(corsHeaders, corsOrigins, http.MethodGet, http.MethodPost).
+			Exhaust())
+	} else {
+		// Secure cookies can't be set over http
+		logger.Warn("CSRF disabled over HTTP")
+		handler.Handle(LOGINPATH, Middleware(handler.login).
+			FakeCSRF().
+			Methods(corsHeaders, corsOrigins, http.MethodGet, http.MethodPost).
+			Exhaust())
+	}
 	handler.Handle(LOGOUTPATH, Middleware(handler.logout).
 		Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).
 		Methods(corsHeaders, corsOrigins, http.MethodGet).
@@ -159,7 +190,7 @@ func (h *ProxyHandler) Check(ctx context.Context, token string) (context.Context
 		return nil, err
 	}
 	logger := h.Logger.WithField("cred", cred)
-	mgr, err := h.Factory.Find(h.Api, cred)
+	mgr, err := h.Factory.Find(cred)
 	if err != nil {
 		logger.WithError(err).Error("Failed to create pod manager")
 		return nil, err
@@ -220,7 +251,6 @@ func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred au
 		ErrMessage:  msg,
 		CSRFTag:     csrf.TemplateField(r),
 	}
-	w.Header().Set(CSRFHEADER, csrf.Token(r))
 	// If this is an API call, return json
 	if isApiCall(r) {
 		apiReply(h.Logger.WithField("msg", msg), w, params)
@@ -316,7 +346,7 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 func (h *ProxyHandler) logout(w http.ResponseWriter, r *http.Request) {
 	h.Logger.Debug("Triggering LOGOUT Path")
 	session := r.Context().Value(SessionKeyType(0)).(Session)
-	h.Auth.Logout(session.AuthSession)
+	session.AuthSession.Logout()
 	http.SetCookie(w, &http.Cookie{
 		Name:   SESSIONCOOKIE,
 		Value:  "",
@@ -344,7 +374,7 @@ func (h *ProxyHandler) healthz(w http.ResponseWriter, r *http.Request) {
 	}
 	h.lastHealth.Store(timestamp)
 	// Check kubernetes connection
-	version, err := h.Api.ServerVersion()
+	version, err := h.Factory.ServerVersion()
 	if err != nil {
 		h.Logger.WithError(err).Error("Failed health check")
 		http.Error(w, "Failed health check", http.StatusInternalServerError)
@@ -380,7 +410,7 @@ func (h *ProxyHandler) infoPage(w http.ResponseWriter, r *http.Request) {
 func (h *ProxyHandler) killPage(w http.ResponseWriter, r *http.Request) {
 	h.Logger.Debug("Triggering Kill Page")
 	session := r.Context().Value(SessionKeyType(0)).(Session)
-	if err := session.Manager.Delete(r.Context(), h.Api); err != nil {
+	if err := session.Manager.Delete(r.Context()); err != nil {
 		session.Logger.WithError(err).Error("Failed to kill pod")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -420,7 +450,7 @@ func (h *ProxyHandler) spawnPage(w http.ResponseWriter, r *http.Request) {
 func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request) {
 	h.Logger.WithField("path", r.URL.Path).Debug("Triggering Proxy")
 	session := r.Context().Value(SessionKeyType(0)).(Session)
-	proxy, _, err := session.Manager.Proxy(r.Context(), h.Api, false)
+	proxy, _, err := session.Manager.Proxy(r.Context(), false)
 	if err != nil {
 		session.Logger.WithError(err).Error("Failed to get pod status")
 		http.Error(w, "Failed to get pod status", http.StatusInternalServerError)
@@ -456,7 +486,7 @@ func (h *ProxyHandler) forward(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProxyHandler) NewParams(r *http.Request, session Session, create bool) (TemplateParams, error) {
-	_, info, err := session.Manager.Proxy(r.Context(), h.Api, create)
+	_, info, err := session.Manager.Proxy(r.Context(), create)
 	if err != nil {
 		return TemplateParams{}, err
 	}

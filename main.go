@@ -22,6 +22,7 @@ import (
 
 	"github.com/warpcomdev/keyproxy/internal/auth"
 	"github.com/warpcomdev/keyproxy/internal/kube"
+	"github.com/warpcomdev/keyproxy/internal/mock"
 	"github.com/warpcomdev/keyproxy/internal/server"
 )
 
@@ -69,45 +70,61 @@ func main() {
 		panic(err)
 	}
 
-	logger.WithFields(log.Fields{"port": config.PodPort}).Info("Building pod factory")
-	factory := kube.NewFactory(logger, tmpl, time.Duration(config.PodLifetime)*time.Minute, "http", config.PodPort, config.ForwardedProto, server.SESSIONCOOKIE, config.Labels)
-	defer factory.Cancel()
-
-	logger.WithFields(log.Fields{"namespace": config.Namespace}).Info("Connecting to kubernetes API")
-	api, err := kube.Loop(logger, config.Namespace, factory, config.Threads, config.Labels)
-	if err != nil {
-		panic(err)
-	}
-	defer api.Cancel()
-
-	logger.WithFields(log.Fields{"keystone": config.KeystoneURL}).Info("Building auth manager")
-	// Use random signing key. Beware if we ever deploy more than one pod.
-	var signingKey []byte
-	if config.SigningKey != "" {
-		logger.Info("Using configured signing key")
-		signingKey = []byte(config.SigningKey)
+	// Check offline mode, for Web UI testing
+	var authInstance server.AuthManager
+	var factoryInstance server.KubeFactory
+	if config.Offline {
+		logger.Warn("Running in offline mode")
+		authInstance = &mock.AuthManager{
+			Username: "admin",
+			Password: "password",
+			Service:  "offline",
+			Token:    "test-offline-token",
+		}
+		factoryInstance = &mock.KubeFactory{
+			PodInfo: kube.PodInfo{
+				Name:  "offline_pod",
+				Type:  "DELETED",
+				Phase: "Unknown",
+				Ready: false,
+			},
+		}
 	} else {
-		logger.Info("Using random signing key")
-		signingKey = make([]byte, 64)
-		rand.Read(signingKey)
-	}
-	auth := auth.New(logger, time.Duration(config.SessionLifetime)*time.Minute, config.KeystoneURL, jwt.SigningMethodHS256, jwt.Keyfunc(func(*jwt.Token) (interface{}, error) { return signingKey, nil }))
-	defer auth.Cancel()
+		logger.WithFields(log.Fields{"keystone": config.KeystoneURL}).Info("Building auth manager")
+		// Use random signing key. Beware if we ever deploy more than one pod.
+		var signingKey []byte
+		if config.SigningKey != "" {
+			logger.Info("Using configured signing key")
+			signingKey = []byte(config.SigningKey)
+		} else {
+			logger.Info("Using random signing key")
+			signingKey = make([]byte, 64)
+			rand.Read(signingKey)
+		}
+		auth := auth.New(logger, time.Duration(config.SessionLifetime)*time.Minute, config.KeystoneURL, jwt.SigningMethodHS256, jwt.Keyfunc(func(*jwt.Token) (interface{}, error) { return signingKey, nil }))
+		defer auth.Cancel()
 
-	corsOrigins := make([]string, 0, 1)
-	if config.Devel {
-		logger.Warn("Running in devel mode")
-		corsOrigins = append(corsOrigins, "http://localhost:3000")
-	} else {
-		logger.Info("Running in prod mode")
+		logger.WithFields(log.Fields{"port": config.PodPort}).Info("Building pod factory")
+		factory := kube.NewFactory(logger, tmpl, time.Duration(config.PodLifetime)*time.Minute, "http", config.PodPort, config.ForwardedProto, server.SESSIONCOOKIE, config.Labels)
+		defer factory.Cancel()
+
+		logger.WithFields(log.Fields{"namespace": config.Namespace}).Info("Connecting to kubernetes API")
+		api, err := kube.Loop(logger, config.Namespace, factory, config.Threads, config.Labels)
+		if err != nil {
+			panic(err)
+		}
+		defer api.Cancel()
+
+		authInstance = authManager{Manager: auth}
+		factoryInstance = kubeFactory{api: api, factory: factory}
 	}
 
 	logger.WithFields(log.Fields{"proxyscheme": config.ProxyScheme, "appscheme": config.AppScheme, "resources": config.StaticFolder}).Info("Building proxy server")
 	proxy, err := server.New(logger, config.Redirect, config.ProxyScheme, config.AppScheme,
-		corsOrigins,
+		config.Cors,
 		localResources(logger, config.TemplateFolder, templates, "templates"),
 		localResources(logger, config.StaticFolder, podstatic, "podstatic"),
-		api, auth, factory)
+		authInstance, factoryInstance)
 	if err != nil {
 		panic(err)
 	}
@@ -138,4 +155,70 @@ func main() {
 	srv.Shutdown(deadlineCtx)
 	serverGroup.Wait()
 	deadlineCancel()
+}
+
+type authSession struct {
+	manager *auth.Manager
+	*auth.Session
+}
+
+type authManager struct {
+	*auth.Manager
+}
+
+// Check implements server.AuthManager
+func (a authManager) Check(token string) (auth.Credentials, server.AuthSession, error) {
+	creds, session, err := a.Manager.Check(token)
+	if err != nil {
+		return creds, nil, err
+	}
+	return creds, authSession{manager: a.Manager, Session: session}, nil
+}
+
+// Check implements server.AuthManager
+func (a authManager) Login(creds auth.Credentials, password string) (server.AuthSession, error) {
+	s, err := a.Manager.Login(creds, password)
+	if err != nil {
+		return nil, err
+	}
+	return authSession{manager: a.Manager, Session: s}, nil
+}
+
+// Check implements server.SessionManager
+func (s authSession) Logout() {
+	s.manager.Logout(s.Session)
+}
+
+type kubeManager struct {
+	api     *kube.API
+	manager *kube.Manager
+}
+
+// Delete implements server.KubeManager
+func (m kubeManager) Delete(ctx context.Context) error {
+	return m.manager.Delete(ctx, m.api)
+}
+
+// Proxy implements server.KubeManager
+func (m kubeManager) Proxy(ctx context.Context, create bool) (*kube.PodProxy, kube.PodInfo, error) {
+	return m.manager.Proxy(ctx, m.api, create)
+}
+
+type kubeFactory struct {
+	api     *kube.API
+	factory *kube.Factory
+}
+
+// Find implements server.KubeFactory
+func (f kubeFactory) Find(creds auth.Credentials) (server.KubeManager, error) {
+	m, err := f.factory.Find(f.api, creds)
+	if err != nil {
+		return nil, err
+	}
+	return kubeManager{api: f.api, manager: m}, nil
+}
+
+// ServerVersion implements server.KubeFactory
+func (f kubeFactory) ServerVersion() (fmt.Stringer, error) {
+	return f.api.ServerVersion()
 }
