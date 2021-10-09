@@ -1,21 +1,20 @@
 <script>
 	import { onMount } from 'svelte';
 	import { createEventDispatcher } from 'svelte';
-	import { loginInfo } from '$lib/stores.js';
+	import { loginInfo, notifications } from '$lib/stores.js';
 
 	export let service = '';
 	export let username = '';
 	let password = '';
 
-	const loginURL  = `http://localhost:8080/podapi/login`;
-	const logoutURL = `http://localhost:8080/podapi/logout`;
+	const loginURL  = `http://172.27.96.250:8080/podapi/login`;
+	const logoutURL = `http://172.27.96.250:8080/podapi/logout`;
 	// Dispatch 'success' on successful login
 	const dispatch = createEventDispatcher();
 
 	// Component state
 	let waitingToken = true;
 	let csrfToken = '';
-	let errMsg = '';
 
 	// Reactive variables
 	let passwordField = null;
@@ -80,7 +79,6 @@
 	// Get the first CSRF token
 	onMount(async () => {
 		waitingToken = true;
-		errMsg = '';
 		getToken()
 		.then((apiResponse) => {
 			if (apiResponse.username !== "") {
@@ -96,7 +94,6 @@
 			usernameField.focus();
 		})
 		.catch(reason => {
-			//errMsg = reason;
 			console.log(reason);
 		})
 		.finally(() => {
@@ -107,7 +104,6 @@
 	// Submit the form
 	function clicked() {
 		waitingToken = true;
-		errMsg = '';
 		let promise  = null;
 		if (csrfToken != '') {
 			promise = postToken();
@@ -124,6 +120,11 @@
 		}
 		promise
 		.then(apiResponse => {
+			// Cleaning error message
+			notifications.update(current => {
+				current.error = "";
+				return current;
+			})
 			console.log('Dispatching success event', apiResponse);
 			loginInfo.update(current => {
 				current.username = apiResponse.username;
@@ -133,8 +134,11 @@
 			dispatch('success', apiResponse);
 		})
 		.catch(reason => {
-			errMsg = reason;
-			console.log(errMsg);
+			notifications.update(current => {
+				current.error = reason;
+				return current;
+			})
+			console.log(reason);
 			// Mimic default post behaviour by cleaning password
 			password = "";
 			passwordField.focus()
@@ -146,6 +150,12 @@
 
 	$: {
 		submitDisabled = (username === "" || password === "" || service === "" || waitingToken);
+		if (!submitDisabled) {
+			notifications.update(current => {
+				current.error = "";
+				return current;
+			})
+		}
 	}
 </script>
 
@@ -153,35 +163,17 @@
 	<fieldset>
 		<legend>Inicio de sesión con Keystone</legend>
 		<div class="container">
-			<label for="username">Usuario</label>
-			<input type="text" placeholder="Usuario" id="username" name="username" bind:value={username} bind:this={usernameField}/>
-			<label for="password">Password</label>
-			<input type="password" placeholder="password" id="password" name="password" bind:value={password} bind:this={passwordField}/>
-			<label for="service">Servicio</label>
-			<input type="text" placeholder="Servicio" id="service" name="service" bind:value={service} />
-			<button on:click|preventDefault={clicked} disabled={submitDisabled}>Iniciar sesión</button>
-			<div class:errbox={errMsg != ""} class="emptymsgbox">
-				{errMsg}
+			<label for="username" class="form-label">Usuario</label>
+			<div class="input-group">
+				<input type="text " class="form-control" placeholder="Usuario" id="username" name="username" bind:value={username} bind:this={usernameField}/>
+				<label for="service" class="form-label m-2">@ Servicio</label>
+				<input type="text" class="form-control" placeholder="Servicio" id="service" name="service" bind:value={service} />
+			</div>
+			<label for="password" class="form-label mt-2">Password</label>
+			<input type="password" class="form-control" placeholder="password" id="password" name="password" bind:value={password} bind:this={passwordField}/>
+			<div class="d-grid mt-4">
+			<button class="btn btn-primary" on:click|preventDefault={clicked} disabled={submitDisabled}>Iniciar sesión</button>
 			</div>
 		</div>
 	</fieldset>
 </form>
-
-<style>
-	/* Labels to the left */
-	div.container {
-		display: grid;
-		grid-template-columns: min-content auto;
-		grid-gap: 1rem;
-		padding: 16px;
-	}
-	div.container label {
-		text-align: left;
-	}
-	div.container label:after {
-		content: ':';
-	}
-	div.container div,button {
-		grid-column: span 2;
-	}
-</style>

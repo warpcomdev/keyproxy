@@ -8,6 +8,6 @@
     }
 </script>
 
-<Login on:success={gotoInfo} autoRefresh={15}/>
+<Login on:success={gotoInfo}/>
 
 
