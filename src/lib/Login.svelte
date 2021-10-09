@@ -22,22 +22,38 @@
 	let submitDisabled = true;
 
 	// Get CSRF token, raise on error
-	function getToken() {
+	async function getToken() {
 		csrfToken = '';
-		return fetch(loginURL, {
+		let response = await fetch(loginURL, {
 			credentials: 'include',
 			headers: {
 				'Accept': 'application/json'
 			}
 		})
-		.then(parseResponse)
+		return await parseResponse(response);
+	}
+
+	// Parse response promise, raise on error
+	async function parseResponse(response) {
+		csrfToken = response.headers.get("X-Csrf-Token")
+		if (response.status != 200) {
+			return {
+				username: "",
+				errMessage: await response.text()
+			};
+		}
+		let apiResponse = await response.json();
+		if (!!apiResponse.errMessage) {
+			apiResponse.username = "";
+		}
+		return apiResponse;
 	}
 
 	// Post the token, raise on error.
-	function postToken() {
+	async function postToken() {
 		let token = csrfToken;
 		csrfToken = '';
-		return fetch(loginURL, {
+		let response = await fetch(loginURL, {
 			method: 'POST',
 			credentials: 'include',
 			headers: {
@@ -49,38 +65,19 @@
 				'password': password,
 				'service': service
     		})
-		})
-		.then(parseResponse)
-		.then(apiResponse => {
-			if (apiResponse.username === "") {
-				throw "invalid credentials";
-			}
-			return apiResponse;
-		})
-	}
-
-	// Parse response promise, raise on error
-	function parseResponse(response) {
-		csrfToken = response.headers.get("X-Csrf-Token")
-		if (response.status != 200) {
-			return response.text().then(reason => {
-				throw reason;
-			})
+		});
+		let apiResponse = await parseResponse(response);
+		if (!!apiResponse.errMessage) {
+			throw apiResponse.errMessage;
 		}
-		return response.json()
-		.then(apiResponse => {
-			if (!!apiResponse.errMessage && apiResponse.errMessage !== "") {
-				throw apiResponse.errMessage;
-			}
-			return apiResponse;
-		})
+		return apiResponse;
 	}
 
 	// Get the first CSRF token
 	onMount(async () => {
 		waitingToken = true;
-		getToken()
-		.then((apiResponse) => {
+		try {
+			let apiResponse = await getToken();
 			if (apiResponse.username !== "") {
 				console.log('Dispatching success event', apiResponse);
 				loginInfo.update(current => {
@@ -92,34 +89,26 @@
 				return;
 			}
 			usernameField.focus();
-		})
-		.catch(reason => {
+		} catch (reason) {
 			console.log(reason);
-		})
-		.finally(() => {
+		} finally {
 			waitingToken = false;
-		});
+		}
 	});
 
 	// Submit the form
-	function clicked() {
+	async function clicked() {
 		waitingToken = true;
-		let promise  = null;
-		if (csrfToken != '') {
-			promise = postToken();
-		} else {
-			// Need to get the token first,
-			// and check the user is not logged in.
-			promise = getToken()
-			.then((apiResponse) => {
-				// If the user is already logged in, no need to post
-				if (apiResponse.username === "") {
-					return postToken();
-				}
-			});
-		}
-		promise
-		.then(apiResponse => {
+		let apiResponse;
+		try {
+			if (csrfToken === "") {
+				apiResponse = await getToken();
+				if (!!apiResponse.errMessage || apiResponse.username === "") {
+					apiResponse = await postToken();
+				};
+			} else {
+				apiResponse = await postToken();
+			}
 			// Cleaning error message
 			notifications.update(current => {
 				current.error = "";
@@ -132,8 +121,7 @@
 				return current;
 			})
 			dispatch('success', apiResponse);
-		})
-		.catch(reason => {
+		} catch (reason) {
 			notifications.update(current => {
 				current.error = reason;
 				return current;
@@ -142,10 +130,9 @@
 			// Mimic default post behaviour by cleaning password
 			password = "";
 			passwordField.focus()
-		})
-		.finally(() => {
+		} finally {
 			waitingToken = false;
-		});
+		}
 	}
 
 	$: {

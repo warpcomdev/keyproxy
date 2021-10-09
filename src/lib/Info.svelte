@@ -24,32 +24,28 @@
 
 	// Get pod info, raise on error
 	async function getInfo() {
-		return fetch(infoURL, {
+		let response = await fetch(infoURL, {
 			credentials: 'include',
 			headers: {
 				'Accept': 'application/json'
 			}
 		})
-		.then((response) => {
-			if (response.status == 401) {
-				// Generate a fake invalid credentials
-				return response.text().then((text) => {
-					return {
-						errMessage: text,
-						username: "",
-					}
-				});
-			}
-			if (response.status != 200) {
-				return response.text().then(text => { throw text });
-			}
-			return response.json();
-		});
+		if (response.status == 401) {
+			// Generate a fake invalid credentials
+			return {
+				errMessage: await response.text(),
+				username: "",
+			};
+		}
+		if (response.status != 200) {
+			throw await response.text();
+		}
+		return await response.json();
 	}
 
 	// Try to collect info for the first time
 	onMount(async () => {
-		refresh()
+		await refresh();
 	});
 
 	// Clear refresh timer
@@ -61,9 +57,9 @@
 	})
 
 	// Refresh the info
-	function refresh() {
-		return getInfo()
-		.then((apiResponse) => {
+	async function refresh() {
+		try {
+			let apiResponse = await getInfo();
 			if (!!apiResponse.errMessage || apiResponse.username === "") {
 				console.log('Dispatching login event', apiResponse);
 				dispatch('login', apiResponse);
@@ -86,15 +82,13 @@
 				return current;
 			});
 			dispatch('update', apiResponse);
-		})
-		.catch(reason => {
+		} catch(reason) {
 			notifications.update(current => {
 				current.error = reason;
 				return current;
 			});
 			console.log(reason);
-		})
-		.finally(() => {
+		} finally {
 			lastUpdate = (new Date()).toLocaleString();
 			if (autoRefresh > 0) {
 				if ($targetAcquired) {
@@ -103,7 +97,7 @@
 					podTimer = setTimeout(refresh, autoRefresh * 1000);
 				}
 			}
-		});
+		}
 	}
 
 	$: {
@@ -138,7 +132,7 @@
 			<dt class="col">Acceso a aplicación</dt>
 			<dd class="col">
 				{#if $podInfo.ready}
-				<a href="{$appInfo.scheme}://{$appInfo.host}" target="_blank">Aplicación lista</a>
+				<a href="{$appInfo.scheme}://{$appInfo.host}" target="_blank" alt="Acceso a aplicación">Aplicación lista</a>
 				{:else}
 				No acepta conexión.
 				{/if}

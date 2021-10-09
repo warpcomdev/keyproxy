@@ -13,41 +13,39 @@
 	// 'kill': after pod killed.
 	const dispatch = createEventDispatcher();
 	
-	function doGet(url, message) {
-		return fetch(url, {
-			credentials: 'include',
-			headers: {
-				'Accept': 'application/json'
-			}
-		})
-		.then(response => {
+	async function doGet(url, message) {
+		try {
+			let response = await fetch(url, {
+				credentials: 'include',
+				headers: {
+					'Accept': 'application/json'
+				}
+			});
 			if (response.status != 200) {
-				return response.text().then(text => { throw text; });
+				throw await response.text();
 			}
-			return response.json();
-		})
-		.then(() => {
+			let apiResponse = await response.json();
 			dispatch(message, message);
-		})
-		.catch(reason => {
+			return apiResponse;
+		} catch (reason) {
 			notifications.update(current => {
 				current.error = reason;
 				return current;
 			});
 			console.log(reason);
-		})
+		}
 	}
 
-	function doLogout() {
-		return doGet(logoutURL, 'logout');
+	async function doLogout() {
+		return await doGet(logoutURL, 'logout');
 	}
 
-	function doSpawn() {
-		return doGet(spawnURL, 'spawn');
+	async function doSpawn() {
+		return await doGet(spawnURL, 'spawn');
 	}
 
-	function doKill() {
-		return doGet(killURL, 'kill');
+	async function doKill() {
+		return await doGet(killURL, 'kill');
 	}
 </script>
 
