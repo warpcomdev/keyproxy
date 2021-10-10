@@ -141,7 +141,7 @@
 			<th class="th has-text-weight-normal">Acceso a aplicación</th>
 			<td class="td">
 				{#if $podInfo.ready}
-				<a href="{$appInfo.scheme}://{$appInfo.host}" target="_blank" alt="Acceso a aplicación">Aplicación lista</a>
+				<a rel="external" href="{$appInfo.scheme}://{$appInfo.host}" target="_blank" alt="Acceso a aplicación">Aplicación lista</a>
 				{:else}
 				No acepta conexión.
 				{/if}

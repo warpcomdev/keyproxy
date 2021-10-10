@@ -56,6 +56,23 @@ func (m *middleware) CSRF(csrfSecret []byte, options ...csrf.Option) *middleware
 	return m
 }
 
+// CSP adds Content-Security-Policy
+func (m *middleware) CSP(sandbox, upgradeInsecure bool) *middleware {
+	handler := m.Handler
+	m.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		csp := "frame-ancestors 'none'"
+		if sandbox {
+			csp = csp + "; default-src 'self'"
+		}
+		if upgradeInsecure {
+			csp = csp + "; upgrade-insecure-requests"
+		}
+		w.Header().Set("Content-Security-Policy", csp)
+		handler.ServeHTTP(w, r)
+	})
+	return m
+}
+
 // FakeCSRF sets a fake CSRFHeader when proxyprotocol is http.
 func (m *middleware) FakeCSRF() *middleware {
 	handler := m.Handler

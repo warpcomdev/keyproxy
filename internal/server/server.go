@@ -134,6 +134,7 @@ func New(logger *log.Logger, redirect, proxyscheme, appscheme string, corsOrigin
 	}
 	rand.Read(handler.csrfSecret)
 
+	upgradeInsecure := appscheme == "https"
 	corsHeaders := []string{
 		"Content-Type",
 		CSRFHEADER,
@@ -143,6 +144,7 @@ func New(logger *log.Logger, redirect, proxyscheme, appscheme string, corsOrigin
 		handler.Handle(LOGINPATH, Middleware(handler.login).
 			CSRF(handler.csrfSecret, options...).
 			Methods(corsHeaders, corsOrigins, http.MethodGet, http.MethodPost).
+			CSP(true, upgradeInsecure).
 			Exhaust())
 	} else {
 		// Secure cookies can't be set over http
@@ -150,29 +152,36 @@ func New(logger *log.Logger, redirect, proxyscheme, appscheme string, corsOrigin
 		handler.Handle(LOGINPATH, Middleware(handler.login).
 			FakeCSRF().
 			Methods(corsHeaders, corsOrigins, http.MethodGet, http.MethodPost).
+			CSP(true, upgradeInsecure).
 			Exhaust())
 	}
 	handler.Handle(LOGOUTPATH, Middleware(handler.logout).
 		Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).
 		Methods(corsHeaders, corsOrigins, http.MethodGet).
+		CSP(true, upgradeInsecure).
 		Exhaust())
 	handler.Handle(HEALTHZPATH, Middleware(handler.healthz).
 		Methods(corsHeaders, corsOrigins, http.MethodGet).
+		CSP(true, upgradeInsecure).
 		Exhaust())
 	handler.Handle(INFOPATH, Middleware(handler.infoPage).
 		Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).
 		Methods(corsHeaders, corsOrigins, http.MethodGet).
+		CSP(true, upgradeInsecure).
 		Exhaust())
 	handler.Handle(KILLPATH, Middleware(handler.killPage).
 		Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).
 		Methods(corsHeaders, corsOrigins, http.MethodGet).
+		CSP(true, upgradeInsecure).
 		Exhaust())
 	handler.Handle(SPAWNPATH, Middleware(handler.spawnPage).
 		Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, true).
 		Methods(corsHeaders, corsOrigins, http.MethodGet).
+		CSP(true, upgradeInsecure).
 		Exhaust())
 	handler.Handle("/", Middleware(handler.forward).
-		Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, false)) // do not exhaust, in case it upgrades to websocket
+		Auth(handler.ProxyScheme, SESSIONCOOKIE, handler.Check, loginPath, false).
+		CSP(false, upgradeInsecure)) // do not exhaust, in case it upgrades to websocket
 	// Add support for pprof
 	handler.Handle("/debug/pprof", http.DefaultServeMux)
 	handler.Tick(time.Second)
