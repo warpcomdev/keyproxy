@@ -82,7 +82,7 @@
 				return current;
 			});
 			appInfo.update(current => {
-				current.host = apiResponse.appHost;
+				current.host = apiResponse.host;
 				current.scheme = apiResponse.appScheme;
 				return current;
 			});
