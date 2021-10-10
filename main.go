@@ -73,12 +73,16 @@ func main() {
 	// Check offline mode, for Web UI testing
 	var authInstance server.AuthManager
 	var factoryInstance server.KubeFactory
-	if config.Offline {
-		logger.Warn("Running in offline mode")
+	if config.OfflineUsername != "" {
+		logger.WithFields(log.Fields{
+			"username": config.OfflineUsername,
+			"domain":   config.OfflineDomain,
+			"password": config.OfflinePassword,
+		}).Warn("Running in offline mode")
 		authInstance = &mock.AuthManager{
-			Username: "admin",
-			Password: "password",
-			Service:  "offline",
+			Username: config.OfflineUsername,
+			Password: config.OfflinePassword,
+			Service:  config.OfflineDomain,
 			Token:    "test-offline-token",
 		}
 		factoryInstance = &mock.KubeFactory{

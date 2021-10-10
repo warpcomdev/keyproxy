@@ -41,7 +41,9 @@ type Config struct {
 	Threads          int
 	Labels           map[string]string
 	Cors             []string
-	Offline          bool
+	OfflineUsername  string
+	OfflineDomain    string
+	OfflinePassword  string
 }
 
 func GetConfig() *Config {
@@ -64,7 +66,8 @@ func GetConfig() *Config {
 	flag.IntVar(&config.SessionLifetime, "sessionlifetime", LookupEnvOrInt("KEYPROXY_SESSIONLIFETIME", 60), "Session lifetime (minutes)")
 	flag.IntVar(&config.GracefulShutdown, "shutdown", LookupEnvOrInt("KEYPROXY_SHUTDOWN", 30), "Graceful shutdown (seconds)")
 	flag.IntVar(&config.Threads, "threads", LookupEnvOrInt("KEYPROXY_THREADS", 10), "Number of controller threads")
-	flag.BoolVar(&config.Offline, "offline", LookupEnvOrBool("KEYPROXY_OFFLINE"), "Offline mode - for WEB UI testing")
+	var offline string
+	flag.StringVar(&offline, "offline", LookupEnvOrString("KEYPROXY_OFFLINE", ""), "Offline mode credentials (`username@domain:password`) for testing")
 	var cors string
 	flag.StringVar(&cors, "cors", LookupEnvOrString("KEYPROXY_CORS", ""), "Comma-separated list of allowed CORS origins")
 	flag.Parse()
@@ -130,6 +133,23 @@ func GetConfig() *Config {
 		}
 	}
 	config.Cors = origins
+	if offline != "" {
+		var username, domain, password string
+		if index := strings.Index(offline, "@"); index > 0 {
+			username = strings.TrimSpace(offline[:index])
+			offline = offline[index+1:]
+			if index = strings.Index(offline, ":"); index > 0 {
+				domain = strings.TrimSpace(offline[:index])
+				password = strings.TrimSpace(offline[index+1:])
+			}
+		}
+		if username == "" || domain == "" || password == "" {
+			panic("Invalid offline credentials " + offline + ". Use `username@domain:password` format")
+		}
+		config.OfflineUsername = username
+		config.OfflinePassword = password
+		config.OfflineDomain = domain
+	}
 	return config
 }
 
