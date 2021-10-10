@@ -323,6 +323,7 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 		Expires:  exp,
 		Path:     "/",
 		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
 	})
 
 	// If this is an API call, return json.
@@ -348,9 +349,12 @@ func (h *ProxyHandler) logout(w http.ResponseWriter, r *http.Request) {
 	session := r.Context().Value(SessionKeyType(0)).(Session)
 	session.AuthSession.Logout()
 	http.SetCookie(w, &http.Cookie{
-		Name:   SESSIONCOOKIE,
-		Value:  "",
-		MaxAge: -1,
+		Name:     SESSIONCOOKIE,
+		Value:    "session-closed",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
 	})
 	if isApiCall(r) {
 		apiReply(session.Logger, w, TemplateParams{
