@@ -8,6 +8,9 @@
     }
 </script>
 
-<Login on:success={gotoInfo}/>
-
-
+<div class="panel">
+	<p class="panel-heading">Inicio de sesión en Keystone</p>
+	<div class="panel-block">
+        <Login on:success={gotoInfo}/>
+    </div>
+</div>

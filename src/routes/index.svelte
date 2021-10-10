@@ -54,5 +54,12 @@
     }
 </script>
 
-<Info bind:autoRefresh bind:triggerRefresh on:login={gotoLogin}/>
-<Toolbar on:logout={gotoLogin} on:spawn={onSpawn} on:kill={onKill}/>
+<div class="panel">
+    <p class="panel-heading">Estado del pod</p>
+    <div class="panel-block">
+        <div class="block is-flex-grow-1">
+            <Info bind:autoRefresh bind:triggerRefresh on:login={gotoLogin}/>
+            <Toolbar on:logout={gotoLogin} on:spawn={onSpawn} on:kill={onKill}/>
+        </div>
+    </div>
+</div>

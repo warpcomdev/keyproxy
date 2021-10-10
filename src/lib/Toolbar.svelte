@@ -1,10 +1,7 @@
 <script>
 	import { createEventDispatcher } from 'svelte';
 	import { loginInfo, notifications, podInfo } from '$lib/stores.js';
-
-	const logoutURL = "http://172.27.96.250:8080/podapi/logout";
-	const killURL = "http://172.27.96.250:8080/podapi/kill";
-	const spawnURL = "http://172.27.96.250:8080/podapi/spawn";
+	import { logoutURL, killURL, spawnURL } from '$lib/urls.js';
 
 	// Dispatch events:
 	// 'error': on error.
@@ -12,7 +9,7 @@
 	// 'spawn': after pod spawned.
 	// 'kill': after pod killed.
 	const dispatch = createEventDispatcher();
-	
+
 	async function doGet(url, message) {
 		try {
 			let response = await fetch(url, {
@@ -49,11 +46,8 @@
 	}
 </script>
 
-<div class="btn-group d-flex" role="toolbar">
-	<button class="btn btn-primary" on:click|preventDefault={doLogout} disabled={$loginInfo.username === ""}>Cerrar sesión</button>
-	<button class="btn btn-primary" on:click|preventDefault={doSpawn}  disabled={$podInfo.event !== "DELETED"}>Arrancar el pod</button>
-	<button class="btn btn-primary" on:click|preventDefault={doKill}   disabled={$podInfo.event === "DELETED"}>Eliminar pod</button>
+<div class="buttons is-centered">
+	<button class="button is-primary is-flex-grow-1" on:click|preventDefault={doLogout} disabled={$loginInfo.username === ""}>Cerrar sesión</button>
+	<button class="button is-primary is-flex-grow-1" on:click|preventDefault={doSpawn}  disabled={$podInfo.event !== "DELETED"}>Arrancar el pod</button>
+	<button class="button is-primary is-flex-grow-1" on:click|preventDefault={doKill}   disabled={$podInfo.event === "DELETED"}>Eliminar pod</button>
 </div>
-
-<style>
-</style>
