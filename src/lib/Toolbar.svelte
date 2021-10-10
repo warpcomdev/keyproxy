@@ -1,6 +1,6 @@
 <script>
 	import { createEventDispatcher } from 'svelte';
-	import { loginInfo, notifications, podInfo } from '$lib/stores.js';
+	import { loginInfo, notifications, podInfo, targetAcquired } from '$lib/stores.js';
 	import { logoutURL, killURL, spawnURL } from '$lib/urls.js';
 
 	// Dispatch events:
@@ -33,20 +33,44 @@
 		}
 	}
 
+	// Notify components of the new target
+	function updateTarget(newTarget, msg) {
+        podInfo.update(current => {
+            current.target = newTarget;
+            return current;
+        })
+        notifications.update(current => {
+            current.info = msg;
+            return current;
+        });
+    }
+
 	async function doLogout() {
 		return await doGet(logoutURL, 'logout');
 	}
 
 	async function doSpawn() {
+		updateTarget(1, "Iniciando pod, por favor espere hasta que esté listo.");
 		return await doGet(spawnURL, 'spawn');
 	}
 
 	async function doKill() {
+		updateTarget(0, "Eliminando pod, puede cerrar sesión.");
 		return await doGet(killURL, 'kill');
 	}
+
+	$: {
+        // Clean notification on target acquired
+        if ($targetAcquired) {
+            notifications.update(current => {
+                current.info = "";
+                return current;
+            })
+        }
+    }
 </script>
 
-<div class="buttons is-centered">
+<div class="buttons is-flex-grow-1">
 	<button class="button is-primary is-flex-grow-1" on:click|preventDefault={doLogout} disabled={$loginInfo.username === ""}>Cerrar sesión</button>
 	<button class="button is-primary is-flex-grow-1" on:click|preventDefault={doSpawn}  disabled={$podInfo.event !== "DELETED"}>Arrancar el pod</button>
 	<button class="button is-primary is-flex-grow-1" on:click|preventDefault={doKill}   disabled={$podInfo.event === "DELETED"}>Eliminar pod</button>

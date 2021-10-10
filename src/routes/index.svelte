@@ -1,7 +1,7 @@
 <script>
     import { base } from '$app/paths';
     import { goto } from '$app/navigation';
-    import { notifications, podInfo, targetAcquired } from '$lib/stores';
+    import { notifications } from '$lib/stores';
     import Info from "$lib/Info.svelte";
     import Toolbar from "$lib/Toolbar.svelte";
 
@@ -19,37 +19,11 @@
         goto(base + "/login");
     }
 
-    function updateTarget(newTarget, msg) {
-        podInfo.update(current => {
-            current.target = newTarget;
-            return current;
-        })
-        notifications.update(current => {
-            current.info = msg;
-            return current;
-        });
+    function checkTrigger() {
         if (autoRefresh <= 0) {
             autoRefresh = 15;
         } else {
             triggerRefresh();
-        }
-    }
-
-    function onSpawn() {
-        updateTarget(1, "Iniciando pod, por favor espere hasta que esté listo.");
-    }
-
-    function onKill() {
-        updateTarget(0, "Eliminando pod, puede cerrar sesión.");
-    }
-
-    $: {
-        // Clean notification on target acquired
-        if ($targetAcquired) {
-            notifications.update(current => {
-                current.info = "";
-                return current;
-            })
         }
     }
 </script>
@@ -57,9 +31,9 @@
 <div class="panel">
     <p class="panel-heading">Estado del pod</p>
     <div class="panel-block">
-        <div class="block is-flex-grow-1">
-            <Info bind:autoRefresh bind:triggerRefresh on:login={gotoLogin}/>
-            <Toolbar on:logout={gotoLogin} on:spawn={onSpawn} on:kill={onKill}/>
-        </div>
+        <Info bind:autoRefresh bind:triggerRefresh on:login={gotoLogin}/>
+    </div>
+    <div class="panel-block">
+        <Toolbar on:logout={gotoLogin} on:spawn={checkTrigger} on:kill={checkTrigger}/>
     </div>
 </div>

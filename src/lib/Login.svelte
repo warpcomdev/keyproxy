@@ -145,7 +145,7 @@
 	}
 </script>
 
-<form method="POST" action="/podapi/login" class:cursor_wait={waitingToken}>
+<form method="POST" class="is-flex-grow-1" action="/podapi/login" class:cursor_wait={waitingToken}>
 	<div class="field">
 		<label for="username" class="label">Usuario</label>
 	</div>
