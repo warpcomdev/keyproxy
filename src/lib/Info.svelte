@@ -156,7 +156,7 @@
 				<label for="autoRefresh" class="label has-text-weight-normal">Actualizar automáticamente</label>
 			</th>
 			<td class="td">
-				<select id="autoRefresh" name="autoRefresh" class="select is-fullwidth" bind:value={autoRefresh} disabled={$targetAcquired}>
+				<select id="autoRefresh" name="autoRefresh" class="select is-fullwidth" bind:value={autoRefresh}>
 					<option value={0} >Desactivado</option>
 					<option value={10}>Cada 10 segundos</option>
 					<option value={15}>Cada 15 segundos</option>
