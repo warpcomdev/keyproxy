@@ -95,6 +95,9 @@ func main() {
 		}
 	} else {
 		logger.WithFields(log.Fields{"keystone": config.KeystoneURL}).Info("Building auth manager")
+		httpClient := &http.Client{
+			Timeout: time.Duration(config.RequestTimeout) * time.Second,
+		}
 		// Use random signing key. Beware if we ever deploy more than one pod.
 		var signingKey []byte
 		if config.SigningKey != "" {
@@ -105,7 +108,7 @@ func main() {
 			signingKey = make([]byte, 64)
 			rand.Read(signingKey)
 		}
-		auth := auth.New(logger, time.Duration(config.SessionLifetime)*time.Minute, config.KeystoneURL, jwt.SigningMethodHS256, jwt.Keyfunc(func(*jwt.Token) (interface{}, error) { return signingKey, nil }))
+		auth := auth.New(logger, httpClient, time.Duration(config.SessionLifetime)*time.Minute, config.KeystoneURL, jwt.SigningMethodHS256, jwt.Keyfunc(func(*jwt.Token) (interface{}, error) { return signingKey, nil }))
 		defer auth.Cancel()
 
 		logger.WithFields(log.Fields{"port": config.PodPort}).Info("Building pod factory")
@@ -123,8 +126,8 @@ func main() {
 		factoryInstance = kubeFactory{api: api, factory: factory}
 	}
 
-	logger.WithFields(log.Fields{"proxyscheme": config.ProxyScheme, "appscheme": config.AppScheme, "resources": config.StaticFolder}).Info("Building proxy server")
-	proxy, err := server.New(logger, config.Redirect, config.ProxyScheme, config.AppScheme,
+	logger.WithFields(log.Fields{"fowardedProto": config.ForwardedProto, "resources": config.StaticFolder}).Info("Building proxy server")
+	proxy, err := server.New(logger, config.Redirect, config.ForwardedProto,
 		config.Cors,
 		localResources(logger, config.TemplateFolder, templates, "templates"),
 		localResources(logger, config.StaticFolder, podstatic, "podstatic"),
@@ -134,21 +137,10 @@ func main() {
 	}
 	defer proxy.Cancel()
 
+	// Start proxy and profiling servers
 	var serverGroup sync.WaitGroup
-	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", config.Port),
-		Handler: proxy,
-	}
-	serverGroup.Add(1)
-	go func() {
-		defer serverGroup.Done()
-		logger.WithField("port", config.Port).Info("Starting service")
-		if err := srv.ListenAndServe(); err != nil {
-			if !errors.Is(err, http.ErrServerClosed) {
-				panic(err)
-			}
-		}
-	}()
+	proxySrv := startServer(logger, &serverGroup, proxy, config.Port, config.RequestTimeout, config.IdleTimeout)
+	pprofSrv := startServer(logger, &serverGroup, http.DefaultServeMux, config.ProfilePort, 0, config.IdleTimeout)
 
 	// Wait for all tasks to finish
 	sigs := make(chan os.Signal, 1)
@@ -156,9 +148,39 @@ func main() {
 	<-sigs
 	log.Warn("Exiting application on received signal")
 	deadlineCtx, deadlineCancel := context.WithDeadline(context.Background(), time.Now().Add(time.Duration(config.GracefulShutdown)*time.Second))
-	srv.Shutdown(deadlineCtx)
+	stopServer(deadlineCtx, &serverGroup, proxySrv)
+	stopServer(deadlineCtx, &serverGroup, pprofSrv)
 	serverGroup.Wait()
 	deadlineCancel()
+}
+
+func startServer(logger *log.Logger, wg *sync.WaitGroup, mux http.Handler, port int, requestTimeout, idleTimeout int) *http.Server {
+	srv := &http.Server{
+		Addr:         fmt.Sprintf(":%d", port),
+		Handler:      mux,
+		ReadTimeout:  time.Duration(requestTimeout) * time.Second,
+		WriteTimeout: time.Duration(requestTimeout) * time.Second,
+		IdleTimeout:  time.Duration(idleTimeout) * time.Second,
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		logger.WithField("port", port).Info("Starting service")
+		if err := srv.ListenAndServe(); err != nil {
+			if !errors.Is(err, http.ErrServerClosed) {
+				panic(err)
+			}
+		}
+	}()
+	return srv
+}
+
+func stopServer(ctx context.Context, wg *sync.WaitGroup, srv *http.Server) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.Shutdown(ctx)
+	}()
 }
 
 type authSession struct {

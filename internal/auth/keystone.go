@@ -17,7 +17,7 @@ const MAX_TOKEN_SIZE = 65536
 
 type Keystone struct {
 	URL    string
-	Client http.Client
+	Client *http.Client
 }
 
 // ErrorEmptyAuthResponse returned when response to auth request is empty

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"net/http"
 	"sync"
 	"time"
 
@@ -110,11 +111,14 @@ type Manager struct {
 }
 
 // New creates new Auth Manager
-func New(logger *log.Logger, lifetime time.Duration, keystoneURL string, signingMethod jwt.SigningMethod, keyFunc jwt.Keyfunc) *Manager {
+func New(logger *log.Logger, client *http.Client, lifetime time.Duration, keystoneURL string, signingMethod jwt.SigningMethod, keyFunc jwt.Keyfunc) *Manager {
 	manager := &Manager{
-		Logger:        logger,
-		Lifetime:      lifetime,
-		Keystone:      Keystone{URL: fmt.Sprintf("%s/v3/auth/tokens", keystoneURL)},
+		Logger:   logger,
+		Lifetime: lifetime,
+		Keystone: Keystone{
+			Client: client,
+			URL:    fmt.Sprintf("%s/v3/auth/tokens", keystoneURL),
+		},
 		SigningMethod: signingMethod,
 		KeyFunc:       keyFunc,
 		cache:         make(map[Credentials]*Session),
