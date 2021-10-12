@@ -10,33 +10,45 @@ import (
 )
 
 const (
-	KEYSTONE                 = "https://auth-dev.iotplatform.telefonica.com:15001"
-	PODCONFIG                = "configs/pod.yaml"
-	PODPORT                  = 9390
-	REDIRECT                 = "/editor"
-	FORWARDEDPROTO           = ""
-	POD_LIFETIME_MINUTE      = 120
-	SESSION_LIFETIME_MINUTE  = 60
-	GRACEFUL_SHUTDOWN_SECOND = 30
-	KEYPROXY_LABEL_NAME      = "keyproxy/release"
-	KEYPROXY_LABEL_VALUE     = "undefined"
+	KEYPROXY_KEYSTONE        = "https://auth-dev.iotplatform.telefonica.com:15001"
+	KEYPROXY_PODCONFIG       = "configs/pod.yaml"
+	KEYPROXY_STATIC          = "podstatic"
+	KEYPROXY_TEMPLATES       = "templates"
+	KEYPROXY_NAMESPACE       = ""
+	KEYPROXY_REDIRECT        = "/editor"
+	KEYPROXY_FORWARDEDPROTO  = "https"
+	KEYPROXY_PORT            = 8080
+	KEYPROXY_PODPORT         = 9390
+	KEYPROXY_PROFILEPORT     = 6060
+	KEYPROXY_PODLIFETIME     = 120
+	KEYPROXY_SESSIONLIFETIME = 60
+	KEYPROXY_REQUESTTIMEOUT  = 5
+	KEYPROXY_IDLETIMEOUT     = 300
+	KEYPROXY_SHUTDOWN        = 30
+	KEYPROXY_THREADS         = 10
+	KEYPROXY_LABEL           = "undefined"
+	KEYPROXY_SIGNINGKEY      = ""
+	KEYPROXY_OFFLINE         = ""
+	KEYPROXY_CORS            = ""
+	CUSTOM_LABEL_NAME        = "keyproxy/release"
 )
 
 type Config struct {
 	KeystoneURL      string
 	PodConfig        string
 	Redirect         string
-	AppScheme        string
-	ProxyScheme      string
 	StaticFolder     string
 	TemplateFolder   string
 	ForwardedProto   string
 	Port             int
 	PodPort          int
+	ProfilePort      int
 	Namespace        string
 	SigningKey       string
 	PodLifetime      int
 	SessionLifetime  int
+	RequestTimeout   int
+	IdleTimeout      int
 	GracefulShutdown int
 	Threads          int
 	Labels           map[string]string
@@ -48,35 +60,42 @@ type Config struct {
 
 func GetConfig() *Config {
 	config := &Config{}
-	flag.StringVar(&config.KeystoneURL, "keystone", LookupEnvOrString("KEYPROXY_KEYSTONE", KEYSTONE), "Keystone URL")
-	flag.StringVar(&config.PodConfig, "podconfig", LookupEnvOrString("KEYPROXY_PODCONFIG", PODCONFIG), "Path to pod config file")
-	flag.StringVar(&config.StaticFolder, "static", LookupEnvOrString("KEYPROXY_STATIC", "podstatic"), "Path to static assets folder")
-	flag.StringVar(&config.TemplateFolder, "templates", LookupEnvOrString("KEYPROXY_TEMPLATES", "templates"), "Path to templates folder")
-	flag.StringVar(&config.Namespace, "namespace", LookupEnvOrString("KEYPROXY_NAMESPACE", ""), "Kubernetes namespace")
-	flag.StringVar(&config.SigningKey, "signingkey", LookupEnvOrString("KEYPROXY_SIGNINGKEY", ""), "Signing key for cookies")
-	flag.StringVar(&config.Redirect, "redirect", LookupEnvOrString("KEYPROXY_REDIRECT", REDIRECT), "Redirect requests for '/' to this path")
-	flag.StringVar(&config.ProxyScheme, "proxyscheme", LookupEnvOrString("KEYPROXY_PROXYSCHEME", ""), "Scheme (http/https) to use for redirects to the login page (defaults to forwardedProto or https)")
-	flag.StringVar(&config.AppScheme, "appscheme", LookupEnvOrString("KEYPROXY_APPSCHEME", ""), "Scheme (http/https) to use for redirects to the app pages (defaults to forwardedProto or https)")
-	flag.StringVar(&config.ForwardedProto, "forwardedproto", LookupEnvOrString("KEYPROXY_FORWARDEDPROTO", FORWARDEDPROTO), "Value for X-Forwarded-Proto header")
+	flag.StringVar(&config.KeystoneURL, "keystone", LookupEnvOrString("KEYPROXY_KEYSTONE", KEYPROXY_KEYSTONE), "Keystone URL")
+	flag.StringVar(&config.PodConfig, "podconfig", LookupEnvOrString("KEYPROXY_PODCONFIG", KEYPROXY_PODCONFIG), "Path to pod config file")
+	flag.StringVar(&config.StaticFolder, "static", LookupEnvOrString("KEYPROXY_STATIC", KEYPROXY_STATIC), "Path to static assets folder")
+	flag.StringVar(&config.TemplateFolder, "templates", LookupEnvOrString("KEYPROXY_TEMPLATES", KEYPROXY_TEMPLATES), "Path to templates folder")
+	flag.StringVar(&config.Namespace, "namespace", LookupEnvOrString("KEYPROXY_NAMESPACE", KEYPROXY_NAMESPACE), "Kubernetes namespace")
+	flag.StringVar(&config.SigningKey, "signingkey", LookupEnvOrString("KEYPROXY_SIGNINGKEY", KEYPROXY_SIGNINGKEY), "Signing key for cookies")
+	flag.StringVar(&config.Redirect, "redirect", LookupEnvOrString("KEYPROXY_REDIRECT", KEYPROXY_REDIRECT), "Redirect requests for '/' to this path")
+	flag.StringVar(&config.ForwardedProto, "forwardedproto", LookupEnvOrString("KEYPROXY_FORWARDEDPROTO", KEYPROXY_FORWARDEDPROTO), "Value for X-Forwarded-Proto header")
 	var label string
-	flag.StringVar(&label, "label", LookupEnvOrString("KEYPROXY_LABEL", KEYPROXY_LABEL_VALUE), "Value for 'keyproxy/release' label")
-	flag.IntVar(&config.Port, "port", LookupEnvOrInt("KEYPROXY_PORT", 8080), "TCP listen port")
-	flag.IntVar(&config.PodPort, "podport", LookupEnvOrInt("KEYPROXY_PODPORT", PODPORT), "Port the backend pod listens to")
-	flag.IntVar(&config.PodLifetime, "podlifetime", LookupEnvOrInt("KEYPROXY_PODLIFETIME", 120), "Pod Lifetime (minutes)")
-	flag.IntVar(&config.SessionLifetime, "sessionlifetime", LookupEnvOrInt("KEYPROXY_SESSIONLIFETIME", 60), "Session lifetime (minutes)")
-	flag.IntVar(&config.GracefulShutdown, "shutdown", LookupEnvOrInt("KEYPROXY_SHUTDOWN", 30), "Graceful shutdown (seconds)")
-	flag.IntVar(&config.Threads, "threads", LookupEnvOrInt("KEYPROXY_THREADS", 10), "Number of controller threads")
+	flag.StringVar(&label, "label", LookupEnvOrString("KEYPROXY_LABEL", KEYPROXY_LABEL), "Value for 'keyproxy/release' label")
+	flag.IntVar(&config.Port, "port", LookupEnvOrInt("KEYPROXY_PORT", KEYPROXY_PORT), "TCP listen port")
+	flag.IntVar(&config.PodPort, "podport", LookupEnvOrInt("KEYPROXY_PODPORT", KEYPROXY_PODPORT), "Port the backend pod listens to")
+	flag.IntVar(&config.ProfilePort, "profileport", LookupEnvOrInt("KEYPROXY_PROFILEPORT", KEYPROXY_PROFILEPORT), "Port backend pod listens to")
+	flag.IntVar(&config.PodLifetime, "podlifetime", LookupEnvOrInt("KEYPROXY_PODLIFETIME", KEYPROXY_PODLIFETIME), "Pod Lifetime (minutes)")
+	flag.IntVar(&config.SessionLifetime, "sessionlifetime", LookupEnvOrInt("KEYPROXY_SESSIONLIFETIME", KEYPROXY_SESSIONLIFETIME), "Session lifetime (minutes)")
+	flag.IntVar(&config.RequestTimeout, "requesttimeout", LookupEnvOrInt("KEYPROXY_REQUESTTIMEOUT", KEYPROXY_REQUESTTIMEOUT), "HTTP Request timeout (client or server) (seconds)")
+	flag.IntVar(&config.IdleTimeout, "idletimeout", LookupEnvOrInt("KEYPROXY_IDLETIMEOUT", KEYPROXY_IDLETIMEOUT), "HTTP idle server timeout (seconds)")
+	flag.IntVar(&config.GracefulShutdown, "shutdown", LookupEnvOrInt("KEYPROXY_SHUTDOWN", KEYPROXY_SHUTDOWN), "Graceful shutdown (seconds)")
+	flag.IntVar(&config.Threads, "threads", LookupEnvOrInt("KEYPROXY_THREADS", KEYPROXY_THREADS), "Number of controller threads")
 	var offline string
-	flag.StringVar(&offline, "offline", LookupEnvOrString("KEYPROXY_OFFLINE", ""), "Offline mode credentials (`username@domain:password`) for testing")
+	flag.StringVar(&offline, "offline", LookupEnvOrString("KEYPROXY_OFFLINE", KEYPROXY_OFFLINE), "Offline mode credentials (`username@domain:password`) for testing")
 	var cors string
-	flag.StringVar(&cors, "cors", LookupEnvOrString("KEYPROXY_CORS", ""), "Comma-separated list of allowed CORS origins")
+	flag.StringVar(&cors, "cors", LookupEnvOrString("KEYPROXY_CORS", KEYPROXY_CORS), "Comma-separated list of allowed CORS origins")
 	flag.Parse()
 
-	if config.ForwardedProto != "" && config.ForwardedProto != "http" && config.ForwardedProto != "https" {
-		panic("ForwardedProto must be either empty, 'http' or 'https'")
+	if config.ForwardedProto != "http" && config.ForwardedProto != "https" {
+		panic("ForwardedProto must be either 'http' or 'https'")
 	}
 	if config.Port <= 1024 || config.Port > 65535 {
 		panic("Port must be between 1024 and 65535")
+	}
+	if config.ProfilePort <= 1024 || config.ProfilePort > 65535 {
+		panic("ProfilePort must be between 1024 and 65535")
+	}
+	if config.Port == config.ProfilePort {
+		panic("Port and ProfilePort must be different")
 	}
 	if config.PodPort <= 0 || config.PodPort > 65535 {
 		panic("Backend Pod port must be between 0 and 65535")
@@ -90,26 +109,14 @@ func GetConfig() *Config {
 	if config.SessionLifetime < 10 || config.SessionLifetime > 120 {
 		panic("Session lifetime must be between 10 and 120 minutes")
 	}
+	if config.RequestTimeout < 1 || config.RequestTimeout > 30 {
+		panic("Request timeout must be between 1 and 30 seconds")
+	}
+	if config.IdleTimeout < 2*config.RequestTimeout || config.IdleTimeout > 3600 {
+		panic("Idle timeout must be between (2 * requesttimeout) and 3600 seconds")
+	}
 	if config.GracefulShutdown < 5 || config.GracefulShutdown > 60 {
 		panic("Graceful shutdown must be between 5 and 60 seconds")
-	}
-	if config.AppScheme != "" && config.AppScheme != "http" && config.AppScheme != "https" {
-		panic("AppScheme must be either empty, 'http' or 'https'")
-	}
-	if config.AppScheme == "" {
-		config.AppScheme = config.ForwardedProto
-		if config.AppScheme == "" {
-			config.AppScheme = "https"
-		}
-	}
-	if config.ProxyScheme != "" && config.ProxyScheme != "http" && config.ProxyScheme != "https" {
-		panic("ProxyScheme must be either empty, 'http' or 'https'")
-	}
-	if config.ProxyScheme == "" {
-		config.ProxyScheme = config.ForwardedProto
-		if config.ProxyScheme == "" {
-			config.ProxyScheme = "https"
-		}
 	}
 	if config.Threads <= 0 || config.Threads > 1000 {
 		panic("Threads must be between 1 and 1000")
@@ -122,7 +129,7 @@ func GetConfig() *Config {
 		panic("Label must be include only alphanumeric characters and '-'")
 	}
 	config.Labels = make(map[string]string)
-	config.Labels[KEYPROXY_LABEL_NAME] = label
+	config.Labels[CUSTOM_LABEL_NAME] = label
 	origins := make([]string, 0, 8)
 	if cors != "" {
 		for _, origin := range strings.Split(cors, ",") {

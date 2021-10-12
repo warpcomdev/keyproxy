@@ -1,7 +1,7 @@
 <script>
 	import { onMount, onDestroy } from 'svelte';
 	import { createEventDispatcher } from 'svelte';
-	import { appInfo, loginInfo, podInfo, targetAcquired, notifications } from '$lib/stores.js';
+	import { loginInfo, podInfo, targetAcquired, notifications } from '$lib/stores.js';
 	import { infoURL } from '$lib/urls.js';
 
 	export let autoRefresh = 0; // seconds
@@ -81,11 +81,6 @@
     			current.ready = !!apiResponse.ready && apiResponse.ready && !!apiResponse.address && apiResponse.address !== "";
 				return current;
 			});
-			appInfo.update(current => {
-				current.host = apiResponse.host;
-				current.scheme = apiResponse.appScheme;
-				return current;
-			});
 			dispatch('update', apiResponse);
 		} catch(reason) {
 			notifications.update(current => {
@@ -141,7 +136,7 @@
 			<th class="th has-text-weight-normal">Acceso a aplicación</th>
 			<td class="td">
 				{#if $podInfo.ready}
-				<a rel="external" href="{$appInfo.scheme}://{$appInfo.host}" target="_blank" alt="Acceso a aplicación">Aplicación lista</a>
+				<a rel="external" href="/" target="_blank" alt="Acceso a aplicación">Aplicación lista</a>
 				{:else}
 				No acepta conexión.
 				{/if}

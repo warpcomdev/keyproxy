@@ -12,6 +12,9 @@ spec:
   - image: warpcomdev/wso2si-integrator:1.1.0
     imagePullPolicy: IfNotPresent
     name: wso2tooling
+    env:
+    - name: HOME
+      value: /opt/wso2si
     ports:
     - name: http
       containerPort: 9390
@@ -25,18 +28,18 @@ spec:
       successThreshold: 1
     resources:
       limits:
-        cpu: 350m
-        memory: 384Mi
+        cpu: 500m
+        memory: 2Gi
       requests:
-        cpu: 150m
-        memory: 192Mi
+        cpu: 250m
+        memory: 512Mi
     volumeMounts:
     - mountPath: /opt/wso2si
       name: data
-      subPath: {{ .Username | quote }}
+      subPath: {{ printf "%s/%s" (.Service | replace "sc_" "") .Username | quote }}
   imagePullSecrets:
   - name: fiware-platform-docker-account
   volumes:
   - name: data
     persistentVolumeClaim:
-      claimName: "{{ .Namespace | splitList "-" | last }}-sftp-{{ .Service }}"
+      claimName: "{{ .Namespace | splitList "-" | last }}-sftp-{{ .Service | replace "sc_" "" }}"

@@ -50,7 +50,7 @@
 	}
 
 	async function doSpawn() {
-		updateTarget(1, "Iniciando pod, por favor espere hasta que esté listo.");
+		updateTarget(1, "Iniciando pod, por favor espere unos minutos hasta que esté listo.");
 		return await doGet(spawnURL, 'spawn');
 	}
 

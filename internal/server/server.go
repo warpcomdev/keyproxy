@@ -91,7 +91,6 @@ type ProxyHandler struct {
 	Logger        *log.Logger
 	Redirect      string // Where to redirect requests for "/"
 	ProxyScheme   string // scheme for the login page, "http" or "https"
-	AppScheme     string // scheme for the app, "http" or "https"
 	Static        fs.FS
 	StaticLogin   bool // true if there is an 'index.html' in podstatic
 	Auth          AuthManager
@@ -102,7 +101,7 @@ type ProxyHandler struct {
 }
 
 // New creates new proxy handler
-func New(logger *log.Logger, redirect, proxyscheme, appscheme string, corsOrigins []string, templates, static fs.FS, authManager AuthManager, factory KubeFactory) (*ProxyHandler, error) {
+func New(logger *log.Logger, redirect, proxyScheme string, corsOrigins []string, templates, static fs.FS, authManager AuthManager, factory KubeFactory) (*ProxyHandler, error) {
 	templateGroup, err := htmlTemplate.New(SpawnTemplate).Funcs(sprig.FuncMap()).ParseFS(templates, "*.html")
 	if err != nil {
 		logger.WithError(err).Error("Failed to load templates")
@@ -119,8 +118,7 @@ func New(logger *log.Logger, redirect, proxyscheme, appscheme string, corsOrigin
 		Static:        static,
 		StaticLogin:   staticLogin,
 		Redirect:      redirect,
-		ProxyScheme:   proxyscheme,
-		AppScheme:     appscheme,
+		ProxyScheme:   proxyScheme,
 		Auth:          authManager,
 		Factory:       factory,
 		templateGroup: templateGroup,
@@ -134,13 +132,13 @@ func New(logger *log.Logger, redirect, proxyscheme, appscheme string, corsOrigin
 	}
 	rand.Read(handler.csrfSecret)
 
-	upgradeInsecure := appscheme == "https"
+	upgradeInsecure := proxyScheme == "https"
 	corsHeaders := []string{
 		"Content-Type",
 		CSRFHEADER,
 	}
 	handler.Handle(STATICPATH, http.StripPrefix(STATICPATH, http.FileServer(http.FS(static))))
-	if proxyscheme == "https" {
+	if upgradeInsecure {
 		handler.Handle(LOGINPATH, Middleware(handler.login).
 			CSRF(handler.csrfSecret, options...).
 			Methods(corsHeaders, corsOrigins, http.MethodGet, http.MethodPost).
@@ -228,7 +226,6 @@ func (h *ProxyHandler) login(w http.ResponseWriter, r *http.Request) {
 // LoginParams passed to login page template
 type LoginParams struct {
 	ProxyScheme string            `json:"proxyScheme"`
-	AppScheme   string            `json:"appScheme"`
 	Host        string            `json:"host"`
 	Service     string            `json:"service"`
 	Username    string            `json:"username"`
@@ -239,7 +236,6 @@ type LoginParams struct {
 // TemplateParams passed to all other template pages
 type TemplateParams struct {
 	ProxyScheme string         `json:"proxyScheme"`
-	AppScheme   string         `json:"appScheme"`
 	Host        string         `json:"host"`
 	Service     string         `json:"service"`
 	Username    string         `json:"username"`
@@ -253,7 +249,6 @@ type TemplateParams struct {
 func (h *ProxyHandler) loginPage(w http.ResponseWriter, r *http.Request, cred auth.Credentials, msg string) {
 	params := LoginParams{
 		ProxyScheme: h.ProxyScheme,
-		AppScheme:   h.AppScheme,
 		Host:        r.Host,
 		Service:     cred.Service,
 		Username:    cred.Username,
@@ -340,7 +335,6 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 	if isApiCall(r) {
 		apiReply(logger, w, LoginParams{
 			ProxyScheme: h.ProxyScheme,
-			AppScheme:   h.AppScheme,
 			Host:        r.Host,
 			Service:     cred.Service,
 			Username:    cred.Username,
@@ -348,7 +342,7 @@ func (h *ProxyHandler) LoginForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectURL := fmt.Sprintf("%s://%s", h.AppScheme, r.Host)
+	redirectURL := fmt.Sprintf("%s://%s", h.ProxyScheme, r.Host)
 	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
@@ -368,7 +362,6 @@ func (h *ProxyHandler) logout(w http.ResponseWriter, r *http.Request) {
 	if isApiCall(r) {
 		apiReply(session.Logger, w, TemplateParams{
 			ProxyScheme: h.ProxyScheme,
-			AppScheme:   h.AppScheme,
 			Host:        r.Host,
 		})
 		return
@@ -505,7 +498,6 @@ func (h *ProxyHandler) NewParams(r *http.Request, session Session, create bool) 
 	}
 	params := TemplateParams{
 		ProxyScheme: h.ProxyScheme,
-		AppScheme:   h.AppScheme,
 		Host:        r.Host,
 		Service:     session.Credentials.Service,
 		Username:    session.Credentials.Username,
