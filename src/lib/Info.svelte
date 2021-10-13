@@ -149,13 +149,11 @@
 		<tr class="tr">
 			<th class="th has-text-weight-normal">Acceso a aplicación</th>
 			<td class="td">
-				<a rel="external" href="/" target="_blank" class="button is-link is-fullwidth" disabled={!$podInfo.ready} alt="Acceso a aplicación">
-					{#if $podInfo.ready}
-					Aplicación lista aquí
-					{:else}
-					No acepta conexión
-					{/if}
-				</a>
+				{#if $podInfo.ready}
+				<a rel="external" href="/" target="_blank" class="button is-link is-fullwidth" alt="Acceda aqui">Acceda aquí</a>
+				{:else}
+				<button class="button is-link is-fullwidth" disabled>No acepta conexión</button>
+				{/if}
 			</td>
 		</tr>
 		<tr class="tr">
