@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
     import { base } from '$app/paths';
     import { goto } from '$app/navigation';
     import { notifications } from '$lib/stores';
@@ -7,7 +7,7 @@
 
     // Bindings for Info
     let autoRefresh = 0;
-    let triggerRefresh;
+    let triggerRefresh: () => void;
 
     function gotoLogin() {
         // Clean messages on navigation

@@ -1,8 +1,8 @@
-<script>
+<script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { createEventDispatcher } from 'svelte';
-	import { loginInfo, podInfo, targetAcquired, notifications } from '$lib/stores.js';
-	import { infoURL } from '$lib/urls.js';
+	import { loginInfo, podInfo, targetAcquired, notifications } from '$lib/stores';
+	import { infoURL } from '$lib/urls';
 
 	export let autoRefresh = 0; // seconds
 	export const triggerRefresh = function() {
@@ -18,12 +18,26 @@
 	const dispatch = createEventDispatcher();
 
 	// Control del ciclo de refresco
-	let lastUpdate = null;
-	let podTimer = null;
+	let lastUpdate: string = null;
+	let podTimer: ReturnType<typeof setTimeout> = null;
 	let waitingResponse = false;
 
+	// See internal/server/server.go, struct TemplateParams
+	type ApiResponse = {
+		username:     string;
+		service?:     string;
+		proxyScheme?: string;
+		host?:        string;
+		eventType?:   string;
+		podPhase?:    string;
+		ready?:       boolean;
+		address?:     string;
+		// This is an add-on
+		errMessage?:  string;
+	}
+
 	// Get pod info, raise on error
-	async function getInfo() {
+	async function getInfo(): Promise<ApiResponse> {
 		waitingResponse = true;
 		try {
 			let response = await fetch(infoURL, {
@@ -76,8 +90,8 @@
 				return current;
 			});
 			podInfo.update(current => {
-				current.event = apiResponse.event_type;
-			    current.phase = apiResponse.pod_phase;
+				current.event = apiResponse.eventType;
+			    current.phase = apiResponse.podPhase;
     			current.ready = !!apiResponse.ready && apiResponse.ready && !!apiResponse.address && apiResponse.address !== "";
 				return current;
 			});

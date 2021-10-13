@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
     import { base } from '$app/paths';
     import { goto } from '$app/navigation';
     import Login from "$lib/Login.svelte";

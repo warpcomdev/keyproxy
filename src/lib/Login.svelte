@@ -1,8 +1,8 @@
-<script>
+<script lang="ts">
 	import { onMount } from 'svelte';
 	import { createEventDispatcher } from 'svelte';
-	import { loginInfo, notifications } from '$lib/stores.js';
-	import { loginURL } from '$lib/urls.js';
+	import { loginInfo, notifications } from '$lib/stores';
+	import { loginURL } from '$lib/urls';
 
 	export let service = '';
 	export let username = '';
@@ -20,8 +20,17 @@
 	let usernameField = null;
 	let submitDisabled = true;
 
+	// See internal/server/server.go, struct LoginParams
+	type LoginResponse = {
+		username: string;
+		service?: string;
+		proxyScheme?: string;
+		host?: string;
+		errMessage?: string;
+	}
+
 	// Get CSRF token, raise on error
-	async function getToken() {
+	async function getToken(): Promise<LoginResponse> {
 		csrfToken = '';
 		let response = await fetch(loginURL, {
 			credentials: 'include',
@@ -33,7 +42,7 @@
 	}
 
 	// Parse response promise, raise on error
-	async function parseResponse(response) {
+	async function parseResponse(response: Response): Promise<LoginResponse> {
 		csrfToken = response.headers.get("X-Csrf-Token")
 		if (response.status != 200) {
 			return {
@@ -49,7 +58,7 @@
 	}
 
 	// Post the token, raise on error.
-	async function postToken() {
+	async function postToken(): Promise<LoginResponse> {
 		let token = csrfToken;
 		csrfToken = '';
 		let response = await fetch(loginURL, {
@@ -98,7 +107,7 @@
 	// Submit the form
 	async function clicked() {
 		waitingToken = true;
-		let apiResponse;
+		let apiResponse: LoginResponse;
 		try {
 			if (csrfToken === "") {
 				apiResponse = await getToken();

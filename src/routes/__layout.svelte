@@ -1,6 +1,6 @@
-<script>
+<script lang="ts">
 	import { dev } from '$app/env';
-	import { notifications } from '$lib/stores.js';
+	import { notifications } from '$lib/stores';
 </script>
 
 <svelte:head>

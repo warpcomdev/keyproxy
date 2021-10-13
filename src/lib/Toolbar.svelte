@@ -1,7 +1,7 @@
-<script>
+<script lang="ts">
 	import { createEventDispatcher } from 'svelte';
-	import { loginInfo, notifications, podInfo, targetAcquired } from '$lib/stores.js';
-	import { logoutURL, killURL, spawnURL } from '$lib/urls.js';
+	import { PodTarget, loginInfo, notifications, podInfo, targetAcquired } from '$lib/stores';
+	import { logoutURL, killURL, spawnURL } from '$lib/urls';
 
 	// Dispatch events:
 	// 'error': on error.
@@ -10,7 +10,7 @@
 	// 'kill': after pod killed.
 	const dispatch = createEventDispatcher();
 
-	async function doGet(url, message) {
+	async function doGet(url: string, message: string): Promise<object> {
 		try {
 			let response = await fetch(url, {
 				credentials: 'include',
@@ -34,7 +34,7 @@
 	}
 
 	// Notify components of the new target
-	function updateTarget(newTarget, msg) {
+	function updateTarget(newTarget: PodTarget, msg: string) {
         podInfo.update(current => {
             current.target = newTarget;
             return current;
@@ -46,17 +46,17 @@
     }
 
 	async function doLogout() {
-		return await doGet(logoutURL, 'logout');
+		await doGet(logoutURL, 'logout');
 	}
 
 	async function doSpawn() {
-		updateTarget(1, "Iniciando pod, por favor espere unos minutos hasta que esté listo.");
-		return await doGet(spawnURL, 'spawn');
+		updateTarget(PodTarget.Ready, "Iniciando pod, por favor espere unos minutos hasta que esté listo.");
+		await doGet(spawnURL, 'spawn');
 	}
 
 	async function doKill() {
-		updateTarget(0, "Eliminando pod, puede cerrar sesión.");
-		return await doGet(killURL, 'kill');
+		updateTarget(PodTarget.Deleted, "Eliminando pod, puede cerrar sesión.");
+		await doGet(killURL, 'kill');
 	}
 
 	$: {
