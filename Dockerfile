@@ -2,7 +2,7 @@ FROM node:14-alpine as node_builder
 WORKDIR /app
 COPY package.json package-lock.json /app/
 RUN  npm ci
-COPY .eslintrc.cjs .prettierrc jsconfig.json svelte.config.js /app/
+COPY .eslintrc.cjs .prettierrc jsconfig.json svelte.config.js tsconfig.json /app/
 COPY static /app/static
 COPY src /app/src
 COPY podstatic /app/podstatic
