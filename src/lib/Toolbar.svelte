@@ -41,6 +41,7 @@
         })
         notifications.update(current => {
             current.info = msg;
+			current.error = "";
             return current;
         });
     }
