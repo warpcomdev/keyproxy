@@ -239,8 +239,8 @@ type TemplateParams struct {
 	Host        string         `json:"host"`
 	Service     string         `json:"service"`
 	Username    string         `json:"username"`
-	EventType   kube.EventType `json:"event_type"`
-	PodPhase    kube.PodPhase  `json:"pod_phase"`
+	EventType   kube.EventType `json:"eventType"`
+	PodPhase    kube.PodPhase  `json:"podPhase"`
 	Ready       bool           `json:"ready"`
 	Address     string         `json:"address"`
 }
