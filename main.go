@@ -198,6 +198,9 @@ func (a authManager) Check(token string) (auth.Credentials, server.AuthSession, 
 	if err != nil {
 		return creds, nil, err
 	}
+	if session == nil {
+		return creds, nil, nil
+	}
 	return creds, authSession{manager: a.Manager, Session: session}, nil
 }
 
