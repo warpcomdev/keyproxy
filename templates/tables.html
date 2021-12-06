@@ -24,5 +24,9 @@
             <th>Internal IP:</th>
             <td>{{ .Address }}</td>
         </tr>
+        <tr>
+            <th>Paths:</th>
+            <td>{{ range .Paths }}{{.}}, {{ end }}</td>
+        </tr>
     </table>
 </div>

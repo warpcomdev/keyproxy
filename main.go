@@ -133,11 +133,15 @@ func main() {
 	}
 
 	logger.WithFields(log.Fields{"fowardedProto": config.ForwardedProto, "resources": config.StaticFolder}).Info("Building proxy server")
+	prefixPaths := make([]string, 0, len(config.PrefixPort))
+	for key, _ := range config.PrefixPort {
+		prefixPaths = append(prefixPaths, key)
+	}
 	proxy, err := server.New(logger, config.Redirect, config.ForwardedProto,
 		config.Cors,
 		localResources(logger, config.TemplateFolder, templates, "templates"),
 		localResources(logger, config.StaticFolder, podstatic, "podstatic"),
-		authInstance, factoryInstance)
+		authInstance, factoryInstance, prefixPaths)
 	if err != nil {
 		panic(err)
 	}

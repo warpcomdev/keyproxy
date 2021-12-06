@@ -95,13 +95,14 @@ type ProxyHandler struct {
 	StaticLogin   bool // true if there is an 'index.html' in podstatic
 	Auth          AuthManager
 	Factory       KubeFactory
+	Paths         []string // Paths supported by pod
 	csrfSecret    []byte
 	templateGroup *htmlTemplate.Template
 	*http.ServeMux
 }
 
 // New creates new proxy handler
-func New(logger *log.Logger, redirect, proxyScheme string, corsOrigins []string, templates, static fs.FS, authManager AuthManager, factory KubeFactory) (*ProxyHandler, error) {
+func New(logger *log.Logger, redirect, proxyScheme string, corsOrigins []string, templates, static fs.FS, authManager AuthManager, factory KubeFactory, paths []string) (*ProxyHandler, error) {
 	templateGroup, err := htmlTemplate.New(SpawnTemplate).Funcs(sprig.FuncMap()).ParseFS(templates, "*.html")
 	if err != nil {
 		logger.WithError(err).Error("Failed to load templates")
@@ -124,6 +125,7 @@ func New(logger *log.Logger, redirect, proxyScheme string, corsOrigins []string,
 		templateGroup: templateGroup,
 		csrfSecret:    make([]byte, 32),
 		ServeMux:      http.NewServeMux(),
+		Paths:         paths,
 	}
 	options := []csrf.Option{
 		csrf.RequestHeader(CSRFHEADER),
@@ -243,6 +245,7 @@ type TemplateParams struct {
 	PodPhase    kube.PodPhase  `json:"podPhase"`
 	Ready       bool           `json:"ready"`
 	Address     string         `json:"address"`
+	Paths       []string       `json:"paths"` // Additional paths supported by pod
 }
 
 // loginPage renders the login page template
@@ -505,6 +508,7 @@ func (h *ProxyHandler) NewParams(r *http.Request, session Session, create bool) 
 		PodPhase:    info.Phase,
 		Address:     info.Address,
 		Ready:       info.Ready,
+		Paths:       h.Paths,
 	}
 	return params, nil
 }
