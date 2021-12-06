@@ -75,7 +75,7 @@ func (m *Manager) updateStatus(ctx context.Context, api *API, create bool) error
 		m.latest = info
 		// In case the pod is running, build a reverse proxy
 		if info.Type != Deleted && info.Phase == PodRunning && info.Address != "" {
-			m.proxy = m.reverseProxy(info.Address)
+			m.proxy = m.newPodProxy(info.Address)
 		}
 	}
 	if m.latest.Type == Deleted && create {
@@ -100,7 +100,7 @@ func (m *Manager) Update(info PodInfo) error {
 		m.proxy = nil
 	case m.latest.Address != info.Address:
 		logger.Info("Updating proxy address")
-		m.proxy = m.reverseProxy(info.Address)
+		m.proxy = m.newPodProxy(info.Address)
 	}
 	m.latest = info
 	if info.Type == Deleted {
@@ -115,10 +115,15 @@ type JWTSession interface {
 }
 
 type PodProxy struct {
-	*httputil.ReverseProxy
+	reverseProxy  *httputil.ReverseProxy
 	sessionCookie string
 	jwtMutex      sync.Mutex
 	jwtSession    JWTSession
+}
+
+// ServeHTTP implements http.Handler
+func (p *PodProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	p.reverseProxy.ServeHTTP(w, r)
 }
 
 // CurrentSession resets the auth Session
@@ -165,25 +170,28 @@ func (pp *PodProxy) modifyResponse(response *http.Response) error {
 	return nil
 }
 
-// reverseProxy builds the reverse proxy instance.
-func (m *Manager) reverseProxy(address string) *PodProxy {
+// newPodProxy builds the reverse proxy instance.
+func (m *Manager) newPodProxy(address string) *PodProxy {
 	target := &url.URL{
 		Scheme: m.Scheme,
 		Host:   fmt.Sprintf("%s:%d", address, m.Port),
 	}
-	pp := &PodProxy{
-		ReverseProxy:  httputil.NewSingleHostReverseProxy(target),
-		sessionCookie: m.SessionCookie,
-	}
+	pp := &PodProxy{sessionCookie: m.SessionCookie}
+	pp.reverseProxy = pp.newReverseProxy(target, m.ForwardedProto, m.Pool)
+	return pp
+}
+
+func (p *PodProxy) newReverseProxy(target *url.URL, forwardedProto string, pool httputil.BufferPool) *httputil.ReverseProxy {
+	rp := httputil.NewSingleHostReverseProxy(target)
 	// Refresh cookie in proxy response
-	pp.ModifyResponse = pp.modifyResponse
-	pp.BufferPool = m.Pool
-	if m.ForwardedProto != "" {
-		director := pp.Director
-		pp.Director = func(r *http.Request) {
+	rp.ModifyResponse = p.modifyResponse
+	rp.BufferPool = pool
+	if forwardedProto != "" {
+		director := rp.Director
+		rp.Director = func(r *http.Request) {
 			director(r)
-			r.Header.Set("X-Forwarded-Proto", m.ForwardedProto)
+			r.Header.Set("X-Forwarded-Proto", forwardedProto)
 		}
 	}
-	return pp
+	return rp
 }
