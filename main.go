@@ -111,8 +111,14 @@ func main() {
 		auth := auth.New(logger, httpClient, time.Duration(config.SessionLifetime)*time.Minute, config.KeystoneURL, jwt.SigningMethodHS256, jwt.Keyfunc(func(*jwt.Token) (interface{}, error) { return signingKey, nil }))
 		defer auth.Cancel()
 
-		logger.WithFields(log.Fields{"port": config.PodPort}).Info("Building pod factory")
-		factory := kube.NewFactory(logger, tmpl, time.Duration(config.PodLifetime)*time.Minute, "http", config.PodPort, config.ForwardedProto, server.SESSIONCOOKIE, config.Labels)
+		// Build all paths for the app
+		defaultPort := kube.ForwardPort{Scheme: "http", Port: config.PodPort}
+		prefixPort := make(map[string]kube.ForwardPort)
+		for path, port := range config.PrefixPort {
+			prefixPort[path] = kube.ForwardPort{Scheme: "http", Port: port}
+		}
+		logger.WithFields(log.Fields{"port": defaultPort, "path": prefixPort}).Info("Building pod factory")
+		factory := kube.NewFactory(logger, tmpl, time.Duration(config.PodLifetime)*time.Minute, defaultPort, prefixPort, config.ForwardedProto, server.SESSIONCOOKIE, config.Labels)
 		defer factory.Cancel()
 
 		logger.WithFields(log.Fields{"namespace": config.Namespace}).Info("Connecting to kubernetes API")

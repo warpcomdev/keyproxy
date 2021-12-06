@@ -22,11 +22,11 @@ var ErrorFactoryCancelled = errors.New("PodFactory is being cancelled")
 type Factory struct {
 	// Keeper must be at the top of the struct for atomic calls
 	clock.Keeper
-	Logger         *log.Logger
-	Template       *template.Template
-	Lifetime       time.Duration
-	Scheme         string
-	Port           int
+	Logger   *log.Logger
+	Template *template.Template
+	Lifetime time.Duration
+	ForwardPort
+	PrefixPort     map[string]ForwardPort // Additional ports for custom path prefixes
 	ForwardedProto string
 	BufferPool     sync.Pool
 	SessionCookie  string
@@ -36,13 +36,13 @@ type Factory struct {
 }
 
 // NewFactory creates a Factory for Managers
-func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Duration, scheme string, port int, forwardedProto string, sessionCookie string, labels map[string]string) *Factory {
+func NewFactory(logger *log.Logger, tmpl *template.Template, lifetime time.Duration, defaultPort ForwardPort, prefixPort map[string]ForwardPort, forwardedProto string, sessionCookie string, labels map[string]string) *Factory {
 	factory := &Factory{
 		Logger:         logger,
 		Template:       tmpl,
 		Lifetime:       lifetime,
-		Scheme:         scheme,
-		Port:           port,
+		ForwardPort:    defaultPort,
+		PrefixPort:     prefixPort,
 		ForwardedProto: forwardedProto,
 		SessionCookie:  sessionCookie,
 		BufferPool: sync.Pool{
@@ -115,8 +115,8 @@ func (f *Factory) newManager(api *API, creds auth.Credentials) (*Manager, error)
 	manager := &Manager{
 		Logger:         f.Logger,
 		Descriptor:     pod,
-		Scheme:         f.Scheme,
-		Port:           f.Port,
+		ForwardPort:    f.ForwardPort,
+		PrefixPort:     f.PrefixPort,
 		ForwardedProto: f.ForwardedProto,
 		Pool:           f,
 		SessionCookie:  f.SessionCookie,

@@ -29,12 +29,10 @@ type Manager struct {
 	Descriptor *PodDescriptor
 	// Scheme and port of the backend server to proxy to.
 	// The IP address will be learnt from the kube cluster.
-	Scheme         string
-	Port           int
+	ForwardPort
+	PrefixPort     map[string]ForwardPort // Additional ports for custom path prefixes
 	ForwardedProto string
 	Pool           httputil.BufferPool
-	// Additional ports for custom path prefixes
-	PrefixPort map[string]ForwardPort
 	// latest status detected and resulting reverse proxy
 	SessionCookie string
 	latest        PodInfo

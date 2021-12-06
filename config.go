@@ -42,6 +42,7 @@ type Config struct {
 	ForwardedProto   string
 	Port             int
 	PodPort          int
+	PrefixPort       map[string]int
 	ProfilePort      int
 	Namespace        string
 	SigningKey       string
@@ -71,7 +72,7 @@ func GetConfig() *Config {
 	var label string
 	flag.StringVar(&label, "label", LookupEnvOrString("KEYPROXY_LABEL", KEYPROXY_LABEL), "Value for 'keyproxy/release' label")
 	flag.IntVar(&config.Port, "port", LookupEnvOrInt("KEYPROXY_PORT", KEYPROXY_PORT), "TCP listen port")
-	flag.IntVar(&config.PodPort, "podport", LookupEnvOrInt("KEYPROXY_PODPORT", KEYPROXY_PODPORT), "Port the backend pod listens to")
+	flag.IntVar(&config.PodPort, "podport", LookupEnvOrInt("KEYPROXY_PODPORT", KEYPROXY_PODPORT), "Backend pod port to forward requests to, by default")
 	flag.IntVar(&config.ProfilePort, "profileport", LookupEnvOrInt("KEYPROXY_PROFILEPORT", KEYPROXY_PROFILEPORT), "Port backend pod listens to")
 	flag.IntVar(&config.PodLifetime, "podlifetime", LookupEnvOrInt("KEYPROXY_PODLIFETIME", KEYPROXY_PODLIFETIME), "Pod Lifetime (minutes)")
 	flag.IntVar(&config.SessionLifetime, "sessionlifetime", LookupEnvOrInt("KEYPROXY_SESSIONLIFETIME", KEYPROXY_SESSIONLIFETIME), "Session lifetime (minutes)")
@@ -83,6 +84,8 @@ func GetConfig() *Config {
 	flag.StringVar(&offline, "offline", LookupEnvOrString("KEYPROXY_OFFLINE", KEYPROXY_OFFLINE), "Offline mode credentials (`username@domain:password`) for testing")
 	var cors string
 	flag.StringVar(&cors, "cors", LookupEnvOrString("KEYPROXY_CORS", KEYPROXY_CORS), "Comma-separated list of allowed CORS origins")
+	var prefixes string
+	flag.StringVar(&prefixes, "prefixes", LookupEnvOrString("KEYPROXY_PREFIXES", ""), "Comma-separated list of url_prefix:port_number for additional ports the pod listens to")
 	flag.Parse()
 
 	if config.ForwardedProto != "http" && config.ForwardedProto != "https" {
@@ -156,6 +159,25 @@ func GetConfig() *Config {
 		config.OfflineUsername = username
 		config.OfflinePassword = password
 		config.OfflineDomain = domain
+	}
+	config.PrefixPort = make(map[string]int)
+	prefixes = strings.TrimSpace(prefixes)
+	if prefixes != "" {
+		for _, forward := range strings.Split(prefixes, ",") {
+			parts := strings.Split(strings.TrimSpace(forward), ":")
+			if len(parts) != 2 {
+				panic("Invalid forward path:port specification " + forward)
+			}
+			path := strings.TrimSpace(parts[0])
+			if path == "" {
+				panic("Invalid path in path:port specification " + forward)
+			}
+			port, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if err != nil {
+				panic("Invalid port number in path:port specification " + forward + ": " + err.Error())
+			}
+			config.PrefixPort[path] = port
+		}
 	}
 	return config
 }
