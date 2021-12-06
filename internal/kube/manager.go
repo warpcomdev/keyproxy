@@ -6,12 +6,19 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/warpcomdev/keyproxy/internal/clock"
 )
+
+// ForwardPort defines scheme and port for proxied pod
+type ForwardPort struct {
+	Scheme string
+	Port   int
+}
 
 // Manager handles the suscription to a pod's events
 type Manager struct {
@@ -26,6 +33,8 @@ type Manager struct {
 	Port           int
 	ForwardedProto string
 	Pool           httputil.BufferPool
+	// Additional ports for custom path prefixes
+	PrefixPort map[string]ForwardPort
 	// latest status detected and resulting reverse proxy
 	SessionCookie string
 	latest        PodInfo
@@ -116,6 +125,7 @@ type JWTSession interface {
 
 type PodProxy struct {
 	reverseProxy  *httputil.ReverseProxy
+	pathProxy     map[string]*httputil.ReverseProxy
 	sessionCookie string
 	jwtMutex      sync.Mutex
 	jwtSession    JWTSession
@@ -123,6 +133,12 @@ type PodProxy struct {
 
 // ServeHTTP implements http.Handler
 func (p *PodProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	for prefix, rp := range p.pathProxy {
+		if strings.HasPrefix(r.URL.Path, prefix) {
+			rp.ServeHTTP(w, r)
+			return
+		}
+	}
 	p.reverseProxy.ServeHTTP(w, r)
 }
 
@@ -172,12 +188,24 @@ func (pp *PodProxy) modifyResponse(response *http.Response) error {
 
 // newPodProxy builds the reverse proxy instance.
 func (m *Manager) newPodProxy(address string) *PodProxy {
+	pp := &PodProxy{
+		sessionCookie: m.SessionCookie,
+		pathProxy:     make(map[string]*httputil.ReverseProxy),
+	}
+	// Add default target
 	target := &url.URL{
 		Scheme: m.Scheme,
 		Host:   fmt.Sprintf("%s:%d", address, m.Port),
 	}
-	pp := &PodProxy{sessionCookie: m.SessionCookie}
 	pp.reverseProxy = pp.newReverseProxy(target, m.ForwardedProto, m.Pool)
+	// Add prefixed targets
+	for path, prefix := range m.PrefixPort {
+		pathTarget := &url.URL{
+			Scheme: prefix.Scheme,
+			Host:   fmt.Sprintf("%s:%d", address, prefix.Port),
+		}
+		pp.pathProxy[path] = pp.newReverseProxy(pathTarget, m.ForwardedProto, m.Pool)
+	}
 	return pp
 }
 
