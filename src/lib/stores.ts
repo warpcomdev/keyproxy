@@ -18,6 +18,7 @@ type PodInfo = {
     phase:  string;
     ready:  boolean;
     target: PodTarget;
+    paths: string[];
 }
 
 // Notifications ahres info about active notifications
@@ -36,6 +37,7 @@ export const podInfo = writable<PodInfo>({
     phase: "",
     ready: false,
     target: PodTarget.Deleted,
+    paths: new Array(),
 });
 
 export const notifications = writable<Notifications>({

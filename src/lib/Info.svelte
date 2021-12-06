@@ -32,6 +32,7 @@
 		podPhase?:    string;
 		ready?:       boolean;
 		address?:     string;
+		paths?:       string[];
 		// This is an add-on
 		errMessage?:  string;
 	}
@@ -93,6 +94,9 @@
 				current.event = apiResponse.eventType;
 			    current.phase = apiResponse.podPhase;
     			current.ready = !!apiResponse.ready && apiResponse.ready && !!apiResponse.address && apiResponse.address !== "";
+				if (!!apiResponse.paths) {
+					current.paths = apiResponse.paths;
+				}
 				return current;
 			});
 			dispatch('update', apiResponse);
@@ -156,6 +160,16 @@
 				{/if}
 			</td>
 		</tr>
+		{#if $podInfo.paths && $podInfo.paths.length > 0 && $podInfo.ready}
+		{#each $podInfo.paths as path}
+		<tr class="tr">
+			<th class="th has-text-weight-normal">&gt; Ruta {path}</th>
+			<td class="td">
+				<a rel="external" href="{path}" target="_blank" class="button is-link is-light is-fullwidth" alt="Acceda aqui">Acceda aquí</a>
+			</td>
+		</tr>
+		{/each}
+		{/if}
 		<tr class="tr">
 			<th class="th has-text-weight-normal">Última actualización</th>
 			<td class="td">{lastUpdate || ""}</td>
